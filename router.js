@@ -5,14 +5,23 @@ export function register(path, page) {
 }
 
 export function navigate(path) {
-  location.hash = path;
+  if (location.hash === path) {
+    resolve();
+  } else {
+    location.hash = path;
+  }
 }
 
 function resolve() {
   const hash = location.hash.slice(1) || '/dashboard';
-  const page = routes.get(hash) ?? routes.get('/dashboard');
-  if (!page) return;
-  document.getElementById('content').innerHTML = page.render();
+  if (!routes.has(hash)) {
+    location.hash = '/dashboard';
+    return;
+  }
+  const page = routes.get(hash);
+  const el = document.getElementById('content');
+  if (!el) throw new Error('router: #content element not found in DOM');
+  el.innerHTML = page.render();
   document.querySelectorAll('[data-route]').forEach(el => {
     el.classList.toggle('active', el.dataset.route === hash);
   });
