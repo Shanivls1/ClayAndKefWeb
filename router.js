@@ -5,7 +5,7 @@ export function register(path, page) {
 }
 
 export function navigate(path) {
-  if (location.hash === path) {
+  if (location.hash.slice(1) === path) {
     resolve();
   } else {
     location.hash = path;
