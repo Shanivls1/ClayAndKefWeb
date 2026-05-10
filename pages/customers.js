@@ -177,3 +177,152 @@ function skeletonRows() {
     </tr>
   `).join('');
 }
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+let allCustomers = [];
+
+// ─── Lifecycle ────────────────────────────────────────────────────────────────
+
+export async function mount(el) {
+  await loadCustomers(el);
+  wireSearch(el);
+  wireModal(el);
+}
+
+// ─── Data ─────────────────────────────────────────────────────────────────────
+
+async function loadCustomers(el) {
+  const tbody = el.querySelector('#customers-tbody');
+
+  const { data, error } = await supabase
+    .from('customers')
+    .select('id, name, phone, notes, objects(id, received_at)')
+    .order('name');
+
+  if (error) {
+    tbody.innerHTML = `
+      <tr><td colspan="5" style="padding:32px 20px; text-align:center; color:#8a7560; font-family:'Inter',sans-serif; font-size:14px;">
+        Failed to load customers. Please try again.
+      </td></tr>`;
+    return;
+  }
+
+  allCustomers = data ?? [];
+  renderRows(tbody, allCustomers);
+}
+
+function renderRows(tbody, customers) {
+  if (customers.length === 0) {
+    tbody.innerHTML = `
+      <tr><td colspan="5" style="padding:40px 20px; text-align:center; color:#8a7560; font-family:'Inter',sans-serif; font-size:14px;">
+        No customers found.
+      </td></tr>`;
+    return;
+  }
+  tbody.innerHTML = customers.map(buildRow).join('');
+}
+
+function buildRow(c) {
+  const objects     = c.objects ?? [];
+  const total       = objects.length;
+  const isReturning = total > 1;
+
+  let lastVisit = '—';
+  if (objects.length > 0) {
+    const maxMs  = Math.max(...objects.map(o => new Date(o.received_at).getTime()));
+    lastVisit = new Date(maxMs).toLocaleDateString('en-GB', {
+      day: 'numeric', month: 'short', year: 'numeric'
+    });
+  }
+
+  const badge = isReturning
+    ? `<span style="display:inline-block;padding:3px 10px;background:rgba(196,149,106,0.15);color:#c4956a;border-radius:999px;font-size:12px;font-weight:500;">Returning</span>`
+    : '';
+
+  return `
+    <tr style="border-bottom:1px solid #f0ebe4; transition:background 0.1s ease;"
+        onmouseover="this.style.background='#faf7f4'"
+        onmouseout="this.style.background='#fff'">
+      <td style="padding:16px 20px; color:#1a120b; font-weight:500;">${escHtml(c.name)}</td>
+      <td style="padding:16px 20px; color:#5a4a3a;">${escHtml(c.phone)}</td>
+      <td style="padding:16px 20px; color:#5a4a3a;">${total}</td>
+      <td style="padding:16px 20px; color:#5a4a3a;">${lastVisit}</td>
+      <td style="padding:16px 20px;">${badge}</td>
+    </tr>`;
+}
+
+function escHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+
+function wireSearch(el) {
+  const input = el.querySelector('#customer-search');
+  const tbody = el.querySelector('#customers-tbody');
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    const filtered = q
+      ? allCustomers.filter(c =>
+          c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q)
+        )
+      : allCustomers;
+    renderRows(tbody, filtered);
+  });
+}
+
+// ─── Modal ────────────────────────────────────────────────────────────────────
+
+function wireModal(el) {
+  const backdrop  = el.querySelector('#modal-backdrop');
+  const closeBtn  = el.querySelector('#modal-close');
+  const addBtn    = el.querySelector('#btn-add-customer');
+  const form      = el.querySelector('#add-customer-form');
+  const errorDiv  = el.querySelector('#form-error');
+  const submitBtn = el.querySelector('#btn-submit');
+
+  function openModal() {
+    backdrop.style.display = 'flex';
+    form.reset();
+    errorDiv.style.display = 'none';
+  }
+
+  function closeModal() {
+    backdrop.style.display = 'none';
+  }
+
+  addBtn.addEventListener('click', openModal);
+  closeBtn.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const name  = form.elements.name.value.trim();
+    const phone = form.elements.phone.value.trim();
+    const notes = form.elements.notes.value.trim();
+
+    errorDiv.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Adding…';
+
+    const { error } = await supabase
+      .from('customers')
+      .insert({ name, phone, notes: notes || null });
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Add Customer';
+
+    if (error) {
+      errorDiv.textContent = 'Failed to add customer: ' + error.message;
+      errorDiv.style.display = 'block';
+      return;
+    }
+
+    closeModal();
+    await loadCustomers(el);
+    wireSearch(el);
+  });
+}
