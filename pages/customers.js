@@ -16,6 +16,10 @@ export function render() {
         border-radius: 4px;
         animation: ck-shimmer 1.4s ease-in-out infinite;
       }
+      #add-customer-form input,
+      #add-customer-form textarea {
+        box-sizing: border-box;
+      }
     </style>
 
     <div style="padding: 40px; max-width: 980px;">
@@ -77,6 +81,7 @@ export function render() {
     </div>
 
     <!-- Add Customer Modal -->
+    <!-- show with display:'flex' to keep card centred -->
     <div id="modal-backdrop" style="
       display:none; position:fixed; inset:0;
       background:rgba(26,18,11,0.4); z-index:100;
@@ -168,7 +173,7 @@ function skeletonRows() {
       <td style="padding:16px 20px;"><span class="ck-skel" style="width:130px;height:14px;"></span></td>
       <td style="padding:16px 20px;"><span class="ck-skel" style="width:24px;height:14px;"></span></td>
       <td style="padding:16px 20px;"><span class="ck-skel" style="width:90px;height:14px;"></span></td>
-      <td style="padding:16px 20px;"></td>
+      <td style="padding:16px 20px;"><span class="ck-skel" style="width:60px;height:14px;"></span></td>
     </tr>
   `).join('');
 }
