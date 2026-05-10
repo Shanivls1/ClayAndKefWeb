@@ -42,7 +42,7 @@ export function render() {
     <!-- Radial glow top-right -->
     <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(196,149,106,0.08),transparent);pointer-events:none;z-index:0;"></div>
 
-    <div style="padding:40px;max-width:980px;position:relative;z-index:1;">
+    <div style="padding:40px;position:relative;z-index:1;">
 
       <!-- Header -->
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;">
