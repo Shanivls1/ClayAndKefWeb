@@ -22,7 +22,7 @@ function resolve() {
   const el = document.getElementById('content');
   if (!el) throw new Error('router: #content element not found in DOM');
   el.innerHTML = page.render();
-  if (page.mount) page.mount(el);
+  if (page.mount) Promise.resolve(page.mount(el)).catch(err => console.error('[router] mount() failed:', err));
   document.querySelectorAll('[data-route]').forEach(el => {
     el.classList.toggle('active', el.dataset.route === hash);
   });
