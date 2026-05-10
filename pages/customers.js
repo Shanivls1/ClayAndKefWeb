@@ -3,7 +3,8 @@ import { supabase } from '../supabase.js';
 const AVATAR_COLORS = ['#e8d5c0', '#dcc9b4', '#d4bfaa', '#c8b49e', '#bda892'];
 
 function getInitials(name) {
-  const parts = String(name ?? '').trim().split(/\s+/);
+  const parts = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
@@ -32,11 +33,11 @@ export function render() {
 
     <!-- Grain texture overlay -->
     <svg style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;opacity:0.04;" xmlns="http://www.w3.org/2000/svg">
-      <filter id="ck-noise">
+      <filter id="ck-noise-customers">
         <feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="4" stitchTiles="stitch"/>
         <feColorMatrix type="saturate" values="0"/>
       </filter>
-      <rect width="100%" height="100%" filter="url(#ck-noise)"/>
+      <rect width="100%" height="100%" filter="url(#ck-noise-customers)"/>
     </svg>
     <!-- Radial glow top-right -->
     <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(196,149,106,0.08),transparent);pointer-events:none;z-index:0;"></div>
@@ -238,7 +239,7 @@ function buildRow(c, isLast) {
   const isReturning = total > 1;
 
   const initials  = getInitials(c.name);
-  const avatarBg  = AVATAR_COLORS[c.name.charCodeAt(0) % AVATAR_COLORS.length];
+  const avatarBg  = AVATAR_COLORS[(c.name?.charCodeAt(0) ?? 65) % AVATAR_COLORS.length];
   const objLabel  = `${total} object${total !== 1 ? 's' : ''}`;
 
   let lastVisit = '';
@@ -252,7 +253,7 @@ function buildRow(c, isLast) {
   const rightEl = isReturning
     ? `<span style="display:inline-block;padding:3px 10px;background:rgba(196,149,106,0.15);color:#c4956a;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap;">Returning</span>`
     : lastVisit
-      ? `<span style="font-size:13px;color:#b0a090;white-space:nowrap;">${lastVisit}</span>`
+      ? `<span style="font-size:13px;color:#b0a090;white-space:nowrap;">${escHtml(lastVisit)}</span>`
       : '';
 
   const borderBottom = isLast ? 'none' : '1px solid #f5f0eb';
