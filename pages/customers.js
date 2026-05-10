@@ -329,6 +329,8 @@ function wireModal(el) {
     }
 
     closeModal();
+    const searchInput = el.querySelector('#customer-search');
+    if (searchInput) searchInput.value = '';
     await loadCustomers(el);
   });
 }
