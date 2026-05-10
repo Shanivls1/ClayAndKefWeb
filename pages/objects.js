@@ -4,18 +4,20 @@ import { supabase } from '../supabase.js';
 
 const STATUS_LABEL = {
   received:  'Waiting',
+  in_oven:   'In Oven',
   ready:     'Ready',
   picked_up: 'Picked Up',
 };
 
 const STATUS_NEXT = {
   received:  'ready',
-  ready:     'picked_up',
+  in_oven:   'ready',
   picked_up: null,
 };
 
 const STATUS_BADGE = {
   received:  'background:rgba(196,149,106,0.12);color:#b3845a;',
+  in_oven:   'background:rgba(230,160,60,0.12);color:#c07a20;',
   ready:     'background:rgba(80,160,80,0.12);color:#3a8a3a;',
   picked_up: 'background:#ede8e2;color:#8a7560;',
 };
@@ -104,6 +106,7 @@ export function render() {
         >
           <option value="">All statuses</option>
           <option value="received">Waiting</option>
+          <option value="in_oven">In Oven</option>
           <option value="ready">Ready</option>
           <option value="picked_up">Picked Up</option>
         </select>
@@ -236,6 +239,317 @@ function escAttr(str) {
   return String(str ?? '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// ─── Lifecycle ────────────────────────────────────────────────────────────────
+
 export async function mount(el) {
-  // stub — wired in later tasks
+  await Promise.all([
+    loadObjectTypes(el),
+    loadCustomers(),
+  ]);
+  await loadObjects(el);
+  wireFilters(el);
+  wireModal(el);
+}
+
+// ─── Data ────────────────────────────────────────────────────────────────────
+
+async function loadObjectTypes(el) {
+  const { data } = await supabase
+    .from('object_types')
+    .select('id, name, raw_stock')
+    .order('name');
+
+  allObjectTypes = data ?? [];
+
+  const typeFilter = el.querySelector('#obj-filter-type');
+  allObjectTypes.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.name;
+    typeFilter.appendChild(opt);
+  });
+}
+
+async function loadCustomers() {
+  const { data } = await supabase
+    .from('customers')
+    .select('id, name')
+    .order('name');
+
+  allCustomers = data ?? [];
+}
+
+async function loadObjects(el) {
+  const body = el.querySelector('#objects-body');
+
+  const { data, error } = await supabase
+    .from('objects')
+    .select('id, status, received_at, notified_at, notes, customers(id, name), object_types(id, name)')
+    .order('received_at', { ascending: false });
+
+  if (error) {
+    body.innerHTML = `
+      <div style="padding:32px 20px;text-align:center;font-family:'Inter',sans-serif;font-size:14px;color:#8a7560;">
+        Failed to load objects. Please try again.
+      </div>`;
+    return;
+  }
+
+  allObjects = data ?? [];
+  renderRows(el, allObjects);
+}
+
+// ─── Rows ─────────────────────────────────────────────────────────────────────
+
+function renderRows(el, objects) {
+  const body = el.querySelector('#objects-body');
+
+  if (objects.length === 0) {
+    body.innerHTML = `
+      <div style="padding:48px 20px;text-align:center;font-family:'Inter',sans-serif;font-size:14px;color:#8a7560;">
+        No objects found.
+      </div>`;
+    return;
+  }
+
+  body.innerHTML = objects.map((o, i) => buildRow(o, i === objects.length - 1)).join('');
+  wireAdvanceDropdowns(el);
+}
+
+function buildRow(o, isLast) {
+  const customerName = o.customers?.name ?? '—';
+  const typeName     = o.object_types?.name ?? '—';
+  const dateIn       = o.received_at
+    ? new Date(o.received_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    : '—';
+
+  const isReady    = o.status === 'ready';
+  const isPickedUp = o.status === 'picked_up';
+
+  const rowBg = isReady ? '#f9fdf7' : '#fff';
+
+  const badge = `<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;font-family:'Inter',sans-serif;${STATUS_BADGE[o.status] ?? ''}">${STATUS_LABEL[o.status] ?? o.status}</span>`;
+
+  let waIndicator = '';
+  if (isReady) {
+    if (o.notified_at) {
+      waIndicator = `
+        <div style="margin-top:5px;display:flex;align-items:center;gap:4px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#25D366" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21l1.65-3.8a9 9 0 1 1 3.4 2.9L3 21"/><path d="m9 10 2 2 4-4"/></svg>
+          <span style="font-size:11px;color:#25D366;font-weight:500;font-family:'Inter',sans-serif;">Message sent</span>
+        </div>`;
+    } else {
+      waIndicator = `
+        <div style="margin-top:5px;display:flex;align-items:center;gap:4px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c0392b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21l1.65-3.8a9 9 0 1 1 3.4 2.9L3 21"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span style="font-size:11px;color:#c0392b;font-weight:500;font-family:'Inter',sans-serif;">Message not sent</span>
+        </div>`;
+    }
+  }
+
+  const nextStatus = STATUS_NEXT[o.status];
+  const advanceCell = nextStatus
+    ? `<select data-object-id="${escAttr(o.id)}" data-current-status="${escAttr(o.status)}" class="advance-select" style="
+        padding:6px 10px;border:1px solid #e0d8cf;border-radius:6px;
+        font-family:'Inter',sans-serif;font-size:12px;color:#5a4a3a;
+        background:#fff;cursor:pointer;outline:none;transition:border-color 0.15s;
+      "
+        onfocus="this.style.borderColor='#c4956a'"
+        onblur="this.style.borderColor='#e0d8cf'"
+      >
+        <option value="">Advance →</option>
+        <option value="${escAttr(nextStatus)}">${STATUS_LABEL[nextStatus]}</option>
+      </select>`
+    : `<span style="font-size:12px;color:#b0a090;font-style:italic;font-family:'Inter',sans-serif;">— complete —</span>`;
+
+  return `
+    <div class="obj-row" style="
+      display:grid;grid-template-columns:2fr 1.5fr 140px 1fr 150px;
+      padding:14px 20px;border-bottom:${isLast ? 'none' : '1px solid #f5f0eb'};
+      align-items:center;background:${rowBg};${isPickedUp ? 'opacity:0.5;' : ''}
+    ">
+      <div style="font-family:'Inter',sans-serif;font-size:14px;font-weight:600;color:#1a120b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(customerName)}</div>
+      <div style="font-family:'Inter',sans-serif;font-size:13px;color:#5a4a3a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(typeName)}</div>
+      <div>${badge}${waIndicator}</div>
+      <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;">${escHtml(dateIn)}</div>
+      <div>${advanceCell}</div>
+    </div>`;
+}
+
+// ─── Filters ──────────────────────────────────────────────────────────────────
+
+function wireFilters(el) {
+  const search    = el.querySelector('#obj-search');
+  const statusSel = el.querySelector('#obj-filter-status');
+  const typeSel   = el.querySelector('#obj-filter-type');
+  [search, statusSel, typeSel].forEach(ctrl => {
+    ctrl.addEventListener('input',  () => applyFilters(el));
+    ctrl.addEventListener('change', () => applyFilters(el));
+  });
+}
+
+function applyFilters(el) {
+  const q      = el.querySelector('#obj-search').value.trim().toLowerCase();
+  const status = el.querySelector('#obj-filter-status').value;
+  const typeId = el.querySelector('#obj-filter-type').value;
+
+  const filtered = allObjects.filter(o => {
+    const name = (o.customers?.name ?? '').toLowerCase();
+    const type = (o.object_types?.name ?? '').toLowerCase();
+    if (q && !name.includes(q) && !type.includes(q)) return false;
+    if (status && o.status !== status) return false;
+    if (typeId && o.object_types?.id !== typeId) return false;
+    return true;
+  });
+
+  renderRows(el, filtered);
+}
+
+// ─── Advance dropdowns ────────────────────────────────────────────────────────
+
+function wireAdvanceDropdowns(el) {
+  el.querySelectorAll('.advance-select').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const objectId   = sel.dataset.objectId;
+      const prevStatus = sel.dataset.currentStatus;
+      const newStatus  = sel.value;
+      if (!newStatus) return;
+
+      const obj = allObjects.find(o => o.id === objectId);
+      if (!obj) return;
+
+      obj.status = newStatus;
+      applyFilters(el);
+
+      const updatePayload = { status: newStatus };
+      if (newStatus === 'picked_up') updatePayload.picked_up_at = new Date().toISOString();
+
+      const { error } = await supabase
+        .from('objects')
+        .update(updatePayload)
+        .eq('id', objectId);
+
+      if (error) {
+        obj.status = prevStatus;
+        applyFilters(el);
+        alert('Failed to update status: ' + error.message);
+        return;
+      }
+
+      if (newStatus === 'ready') {
+        await notifyCustomer(objectId, obj, el);
+      }
+    });
+  });
+}
+
+async function notifyCustomer(objectId, obj, el) {
+  try {
+    const { error: fnError } = await supabase.functions.invoke('notify-customer', {
+      body: { object_id: objectId },
+    });
+    if (fnError) throw fnError;
+
+    const now = new Date().toISOString();
+    await supabase.from('objects').update({ notified_at: now }).eq('id', objectId);
+    obj.notified_at = now;
+  } catch {
+    // notified_at stays null → red indicator shown via applyFilters
+  }
+  applyFilters(el);
+}
+
+// ─── Modal ────────────────────────────────────────────────────────────────────
+
+function wireModal(el) {
+  const backdrop  = el.querySelector('#obj-modal-backdrop');
+  const closeBtn  = el.querySelector('#obj-modal-close');
+  const addBtn    = el.querySelector('#btn-add-object');
+  const form      = el.querySelector('#add-object-form');
+  const errorDiv  = el.querySelector('#obj-form-error');
+  const submitBtn = el.querySelector('#obj-btn-submit');
+
+  function openModal() {
+    const customerSel = form.elements.customer_id;
+    customerSel.innerHTML = '<option value="">Select customer…</option>';
+    allCustomers.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.name;
+      customerSel.appendChild(opt);
+    });
+
+    const typeSel = form.elements.object_type_id;
+    typeSel.innerHTML = '<option value="">Select type…</option>';
+    allObjectTypes.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.raw_stock <= 0 ? `${t.name} (out of stock)` : t.name;
+      typeSel.appendChild(opt);
+    });
+
+    form.reset();
+    form.elements.received_at.value = new Date().toISOString().slice(0, 10);
+    errorDiv.style.display = 'none';
+    backdrop.style.display = 'flex';
+  }
+
+  function closeModal() {
+    backdrop.style.display = 'none';
+  }
+
+  addBtn.addEventListener('click', openModal);
+  closeBtn.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const customerId   = form.elements.customer_id.value;
+    const objectTypeId = form.elements.object_type_id.value;
+    const receivedAt   = form.elements.received_at.value;
+    const notes        = form.elements.notes.value.trim();
+
+    if (!customerId || !objectTypeId || !receivedAt) {
+      errorDiv.textContent = 'Customer, object type, and date are required.';
+      errorDiv.style.display = 'block';
+      return;
+    }
+
+    errorDiv.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Adding…';
+
+    const { error: insertError } = await supabase
+      .from('objects')
+      .insert({
+        customer_id:    customerId,
+        object_type_id: objectTypeId,
+        status:         'received',
+        received_at:    receivedAt,
+        notes:          notes || null,
+      });
+
+    if (insertError) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Add Object';
+      errorDiv.textContent = 'Failed to add object: ' + insertError.message;
+      errorDiv.style.display = 'block';
+      return;
+    }
+
+    const objType = allObjectTypes.find(t => t.id === objectTypeId);
+    if (objType && objType.raw_stock > 0) {
+      await supabase
+        .from('object_types')
+        .update({ raw_stock: objType.raw_stock - 1 })
+        .eq('id', objectTypeId);
+      objType.raw_stock -= 1;
+    }
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Add Object';
+    closeModal();
+    await loadObjects(el);
+  });
 }
