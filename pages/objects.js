@@ -135,6 +135,7 @@ export function render() {
       <div style="display:flex;gap:16px;margin-top:12px;align-items:center;">
         <span style="font-family:'Inter',sans-serif;font-size:11px;color:#b0a090;font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Legend:</span>
         <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;background:rgba(196,149,106,0.12);color:#b3845a;">Waiting</span>
+        <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;background:rgba(230,160,60,0.12);color:#c07a20;">In Oven</span>
         <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;background:rgba(80,160,80,0.12);color:#3a8a3a;">Ready</span>
         <span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;background:#ede8e2;color:#8a7560;">Picked Up</span>
       </div>
@@ -502,7 +503,9 @@ function wireModal(el) {
   addBtn.addEventListener('click', openModal);
   closeBtn.addEventListener('click', closeModal);
   backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+  const onKeydown = e => { if (e.key === 'Escape') closeModal(); };
+  document.addEventListener('keydown', onKeydown);
+  window.addEventListener('hashchange', () => document.removeEventListener('keydown', onKeydown), { once: true });
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
