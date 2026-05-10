@@ -193,6 +193,7 @@ export async function mount(el) {
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
 async function loadCustomers(el) {
+  allCustomers = [];
   const tbody = el.querySelector('#customers-tbody');
 
   const { data, error } = await supabase
@@ -304,6 +305,12 @@ function wireModal(el) {
     const phone = form.elements.phone.value.trim();
     const notes = form.elements.notes.value.trim();
 
+    if (!name || !phone) {
+      errorDiv.textContent = 'Name and phone are required.';
+      errorDiv.style.display = 'block';
+      return;
+    }
+
     errorDiv.style.display = 'none';
     submitBtn.disabled = true;
     submitBtn.textContent = 'Adding…';
@@ -323,6 +330,5 @@ function wireModal(el) {
 
     closeModal();
     await loadCustomers(el);
-    wireSearch(el);
   });
 }
