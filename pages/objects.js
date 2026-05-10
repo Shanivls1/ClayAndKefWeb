@@ -12,6 +12,7 @@ const STATUS_LABEL = {
 const STATUS_NEXT = {
   received:  'ready',
   in_oven:   'ready',
+  ready:     'picked_up',
   picked_up: null,
 };
 
