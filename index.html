@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clay & Kef</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="env.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      display: flex;
+      min-height: 100vh;
+      background: #faf7f4;
+      font-family: 'Inter', sans-serif;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 56px;
+      min-height: 100vh;
+      background: #2d1f14;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 0 20px;
+      flex-shrink: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 50;
+    }
+
+    #logo {
+      width: 36px;
+      height: 36px;
+      background: #c4956a;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 28px;
+      flex-shrink: 0;
+      text-decoration: none;
+    }
+
+    #logo svg {
+      width: 20px;
+      height: 20px;
+      stroke: #2d1f14;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    nav {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      width: 100%;
+      padding: 0 8px;
+    }
+
+    .nav-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      margin: 0 auto;
+      text-decoration: none;
+      color: rgba(255, 255, 255, 0.35);
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .nav-item svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+
+    .nav-item:hover {
+      background: rgba(196, 149, 106, 0.15);
+      color: #c4956a;
+    }
+
+    .nav-item.active {
+      background: rgba(196, 149, 106, 0.2);
+      color: #c4956a;
+    }
+
+    /* Tooltip — slides in from left */
+    .nav-tooltip {
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%) translateX(-6px);
+      background: #1a120b;
+      color: #faf7f4;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: 'Inter', sans-serif;
+      padding: 5px 10px;
+      border-radius: 6px;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    }
+
+    .nav-item:hover .nav-tooltip {
+      opacity: 1;
+      transform: translateY(-50%) translateX(0);
+    }
+
+    /* ── Main content ── */
+    #content {
+      flex: 1;
+      margin-left: 56px;
+      min-height: 100vh;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <aside id="sidebar">
+
+    <!-- Logo -->
+    <a href="#/dashboard" id="logo" title="Clay & Kef">
+      <svg viewBox="0 0 24 24">
+        <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
+      </svg>
+    </a>
+
+    <nav>
+
+      <!-- Dashboard -->
+      <a href="#/dashboard" data-route="/dashboard" class="nav-item">
+        <svg viewBox="0 0 24 24">
+          <rect width="7" height="9" x="3" y="3" rx="1"/>
+          <rect width="7" height="5" x="14" y="3" rx="1"/>
+          <rect width="7" height="9" x="14" y="12" rx="1"/>
+          <rect width="7" height="5" x="3" y="16" rx="1"/>
+        </svg>
+        <span class="nav-tooltip">Dashboard</span>
+      </a>
+
+      <!-- Objects -->
+      <a href="#/objects" data-route="/objects" class="nav-item">
+        <svg viewBox="0 0 24 24">
+          <path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/>
+          <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/>
+          <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>
+        </svg>
+        <span class="nav-tooltip">Objects</span>
+      </a>
+
+      <!-- Stock -->
+      <a href="#/stock" data-route="/stock" class="nav-item">
+        <svg viewBox="0 0 24 24">
+          <rect width="20" height="5" x="2" y="3" rx="1"/>
+          <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/>
+          <path d="M10 12h4"/>
+        </svg>
+        <span class="nav-tooltip">Stock</span>
+      </a>
+
+      <!-- Customers -->
+      <a href="#/customers" data-route="/customers" class="nav-item">
+        <svg viewBox="0 0 24 24">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span class="nav-tooltip">Customers</span>
+      </a>
+
+    </nav>
+  </aside>
+
+  <main id="content"></main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
