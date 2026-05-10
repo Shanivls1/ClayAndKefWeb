@@ -21,7 +21,7 @@
 
     /* ── Sidebar ── */
     #sidebar {
-      width: 56px;
+      width: 72px;
       min-height: 100vh;
       background: #2d1f14;
       display: flex;
@@ -61,28 +61,30 @@
     nav {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 2px;
       width: 100%;
-      padding: 0 8px;
+      padding: 0 4px;
     }
 
     .nav-item {
       position: relative;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      width: 40px;
-      height: 40px;
+      width: 64px;
+      height: 52px;
       border-radius: 10px;
       margin: 0 auto;
       text-decoration: none;
-      color: rgba(255, 255, 255, 0.35);
+      color: rgba(255, 255, 255, 0.32);
       transition: background 0.15s ease, color 0.15s ease;
+      gap: 4px;
     }
 
     .nav-item svg {
-      width: 20px;
-      height: 20px;
+      width: 18px;
+      height: 18px;
       stroke: currentColor;
       fill: none;
       stroke-width: 1.75;
@@ -91,45 +93,45 @@
       flex-shrink: 0;
     }
 
+    .nav-label {
+      font-size: 9px;
+      font-weight: 500;
+      font-family: 'Inter', sans-serif;
+      letter-spacing: 0.01em;
+      line-height: 1;
+    }
+
     .nav-item:hover {
-      background: rgba(196, 149, 106, 0.15);
+      background: rgba(196, 149, 106, 0.12);
       color: #c4956a;
     }
 
     .nav-item.active {
-      background: rgba(196, 149, 106, 0.2);
+      background: rgba(196, 149, 106, 0.18);
       color: #c4956a;
     }
 
-    /* Tooltip — slides in from left */
-    .nav-tooltip {
+    .nav-active-bar {
       position: absolute;
-      left: calc(100% + 10px);
+      left: 0;
       top: 50%;
-      transform: translateY(-50%) translateX(-6px);
-      background: #1a120b;
-      color: #faf7f4;
-      font-size: 12px;
-      font-weight: 500;
-      font-family: 'Inter', sans-serif;
-      padding: 5px 10px;
-      border-radius: 6px;
-      white-space: nowrap;
-      pointer-events: none;
+      transform: translateY(-50%);
+      width: 2px;
+      height: 24px;
+      background: #c4956a;
+      border-radius: 0 2px 2px 0;
       opacity: 0;
-      transition: opacity 0.15s ease, transform 0.15s ease;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+      transition: opacity 0.15s ease;
     }
 
-    .nav-item:hover .nav-tooltip {
+    .nav-item.active .nav-active-bar {
       opacity: 1;
-      transform: translateY(-50%) translateX(0);
     }
 
     /* ── Main content ── */
     #content {
       flex: 1;
-      margin-left: 56px;
+      margin-left: 72px;
       min-height: 100vh;
       overflow-y: auto;
     }
