@@ -195,5 +195,113 @@ export function render() {
 }
 
 export async function mount(el) {
-  // stub — will be filled in Task 2
+  const [typesResult, progressResult] = await Promise.all([
+    supabase.from('object_types').select('*').order('category').order('name'),
+    supabase.from('objects').select('object_type_id').eq('status', 'received'),
+  ]);
+
+  if (typesResult.error) {
+    el.querySelector('#stock-grid').innerHTML = `
+      <div style="grid-column:1/-1;padding:48px 0;text-align:center;
+        font-family:'Inter',sans-serif;font-size:14px;color:#8a7560;">
+        Failed to load stock. Please try again.
+      </div>`;
+    return;
+  }
+
+  allTypes = typesResult.data ?? [];
+  inProgressMap = (progressResult.data ?? []).reduce((m, r) => {
+    m.set(r.object_type_id, (m.get(r.object_type_id) ?? 0) + 1);
+    return m;
+  }, new Map());
+
+  renderCards(el);
+  wireModal(el);
+}
+
+// ─── Card rendering ───────────────────────────────────────────────────────────
+
+function renderCards(el) {
+  const grid = el.querySelector('#stock-grid');
+  if (!grid) return;
+
+  if (allTypes.length === 0) {
+    grid.innerHTML = `
+      <div style="grid-column:1/-1;padding:48px 0;text-align:center;
+        font-family:'Inter',sans-serif;font-size:14px;color:#8a7560;">
+        No object types yet. Use "+ Add Object Type" to create one.
+      </div>`;
+    return;
+  }
+
+  grid.innerHTML = allTypes.map(t => buildCard(t)).join('');
+  wireStockButtons(el);
+}
+
+function buildCard(t) {
+  const inProgress = inProgressMap.get(t.id) ?? 0;
+  const isLowStock = t.raw_stock <= t.low_stock_alert;
+  const error      = stockErrors.get(t.id);
+
+  const cardStyle = isLowStock
+    ? 'background:#fffbf5;border-left:4px solid #d97706;'
+    : 'background:#fff;';
+
+  const pill = isLowStock
+    ? `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
+        font-weight:500;background:rgba(217,119,6,0.12);color:#b45309;">Low stock</span>`
+    : t.category
+      ? `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;
+          font-weight:500;background:#f0ebe4;color:#8a7560;">${escHtml(t.category)}</span>`
+      : '';
+
+  const labelStyle = `font-family:'Inter',sans-serif;font-size:11px;font-weight:600;` +
+    `text-transform:uppercase;letter-spacing:0.06em;color:#8a7560;`;
+  const countStyle = `font-family:'Inter',sans-serif;font-size:20px;font-weight:700;` +
+    `color:#1a120b;min-width:28px;text-align:center;`;
+
+  return `
+    <div style="${cardStyle}border-radius:14px;border:1px solid #e8e1d8;padding:20px;
+      box-shadow:0 2px 6px rgba(45,31,20,0.08),0 8px 24px rgba(45,31,20,0.05);">
+
+      <div style="margin-bottom:6px;">
+        <div style="font-family:'Playfair Display',serif;font-size:18px;font-weight:700;
+          color:#1a120b;margin-bottom:6px;">${escHtml(t.name)}</div>
+        ${pill}
+      </div>
+
+      <div style="font-family:'Inter',sans-serif;font-size:22px;font-weight:600;
+        color:#c4956a;margin:14px 0 18px;">${formatPrice(t.price)}</div>
+
+      <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="${labelStyle}">Raw stock</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="stock-btn stock-minus" data-id="${escHtml(t.id)}"
+              ${t.raw_stock <= 0 ? 'disabled' : ''}>−</button>
+            <span id="stock-count-${escHtml(t.id)}" style="${countStyle}">${t.raw_stock}</span>
+            <button class="stock-btn stock-plus" data-id="${escHtml(t.id)}">+</button>
+          </div>
+        </div>
+
+        ${error ? `<div style="font-family:'Inter',sans-serif;font-size:12px;color:#b94040;">${escHtml(error)}</div>` : ''}
+
+        <div style="display:flex;align-items:center;justify-content:space-between;
+          padding-top:12px;border-top:1px solid #f5f0eb;">
+          <span style="${labelStyle}">In progress</span>
+          <span style="font-family:'Inter',sans-serif;font-size:20px;font-weight:700;
+            color:#5a4a3a;min-width:28px;text-align:center;">${inProgress}</span>
+        </div>
+
+      </div>
+    </div>`;
+}
+
+function wireStockButtons(el) {
+  // stub — filled in Task 3
+}
+
+function wireModal(el) {
+  // stub — filled in Task 4
 }
