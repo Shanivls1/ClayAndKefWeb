@@ -341,5 +341,78 @@ async function handleStockClick(btn, el) {
 }
 
 function wireModal(el) {
-  // stub — filled in Task 4
+  const backdrop  = el.querySelector('#type-modal-backdrop');
+  const closeBtn  = el.querySelector('#type-modal-close');
+  const addBtn    = el.querySelector('#btn-add-type');
+  const form      = el.querySelector('#add-type-form');
+  const errorDiv  = el.querySelector('#type-form-error');
+  const submitBtn = el.querySelector('#type-btn-submit');
+
+  function openModal() {
+    form.reset();
+    errorDiv.style.display = 'none';
+    backdrop.style.display = 'flex';
+  }
+
+  function closeModal() {
+    backdrop.style.display = 'none';
+  }
+
+  addBtn.addEventListener('click', openModal);
+  closeBtn.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+
+  const onKeydown = e => { if (e.key === 'Escape') closeModal(); };
+  document.addEventListener('keydown', onKeydown);
+  window.addEventListener('hashchange', () => document.removeEventListener('keydown', onKeydown), { once: true });
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+
+    const name            = form.elements.name.value.trim();
+    const category        = form.elements.category.value.trim();
+    const price           = parseFloat(form.elements.price.value);
+    const raw_stock       = parseInt(form.elements.raw_stock.value, 10);
+    const low_stock_alert = parseInt(form.elements.low_stock_alert.value, 10);
+
+    if (!name || isNaN(price) || isNaN(raw_stock) || isNaN(low_stock_alert)) {
+      errorDiv.textContent = 'Name, price, initial stock, and alert threshold are required.';
+      errorDiv.style.display = 'block';
+      return;
+    }
+
+    errorDiv.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Adding…';
+
+    const { error } = await supabase.from('object_types').insert({
+      name,
+      category:        category || null,
+      price,
+      raw_stock,
+      low_stock_alert,
+    });
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Add Object Type';
+
+    if (error) {
+      errorDiv.textContent = 'Failed to add: ' + error.message;
+      errorDiv.style.display = 'block';
+      return;
+    }
+
+    closeModal();
+
+    const [typesResult, progressResult] = await Promise.all([
+      supabase.from('object_types').select('*').order('category').order('name'),
+      supabase.from('objects').select('object_type_id').eq('status', 'received'),
+    ]);
+    allTypes = typesResult.data ?? [];
+    inProgressMap = (progressResult.data ?? []).reduce((m, r) => {
+      m.set(r.object_type_id, (m.get(r.object_type_id) ?? 0) + 1);
+      return m;
+    }, new Map());
+    renderCards(el);
+  });
 }
