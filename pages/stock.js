@@ -195,13 +195,16 @@ export function render() {
 }
 
 export async function mount(el) {
+  stockErrors = new Map();
   const [typesResult, progressResult] = await Promise.all([
     supabase.from('object_types').select('*').order('category').order('name'),
     supabase.from('objects').select('object_type_id').eq('status', 'received'),
   ]);
 
   if (typesResult.error) {
-    el.querySelector('#stock-grid').innerHTML = `
+    const grid = el.querySelector('#stock-grid');
+    if (!grid) return;
+    grid.innerHTML = `
       <div style="grid-column:1/-1;padding:48px 0;text-align:center;
         font-family:'Inter',sans-serif;font-size:14px;color:#8a7560;">
         Failed to load stock. Please try again.
@@ -240,7 +243,7 @@ function renderCards(el) {
 
 function buildCard(t) {
   const inProgress = inProgressMap.get(t.id) ?? 0;
-  const isLowStock = t.raw_stock <= t.low_stock_alert;
+  const isLowStock = t.low_stock_alert != null && t.raw_stock <= t.low_stock_alert;
   const error      = stockErrors.get(t.id);
 
   const cardStyle = isLowStock
