@@ -4,6 +4,7 @@ import { supabase } from '../supabase.js';
 let allTypes = [];
 let inProgressMap = new Map();
 let stockErrors = new Map();
+let savingIds = new Set();
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function escHtml(str) {
@@ -196,6 +197,7 @@ export function render() {
 
 export async function mount(el) {
   stockErrors = new Map();
+  savingIds = new Set();
   const [typesResult, progressResult] = await Promise.all([
     supabase.from('object_types').select('*').order('category').order('name'),
     supabase.from('objects').select('object_type_id').eq('status', 'received'),
@@ -282,9 +284,10 @@ function buildCard(t) {
           <span style="${labelStyle}">Raw stock</span>
           <div style="display:flex;align-items:center;gap:8px;">
             <button class="stock-btn stock-minus" data-id="${escHtml(t.id)}"
-              ${t.raw_stock <= 0 ? 'disabled' : ''}>−</button>
+              ${(t.raw_stock <= 0 || savingIds.has(t.id)) ? 'disabled' : ''}>−</button>
             <span id="stock-count-${escHtml(t.id)}" style="${countStyle}">${t.raw_stock}</span>
-            <button class="stock-btn stock-plus" data-id="${escHtml(t.id)}">+</button>
+            <button class="stock-btn stock-plus" data-id="${escHtml(t.id)}"
+              ${savingIds.has(t.id) ? 'disabled' : ''}>+</button>
           </div>
         </div>
 
@@ -315,9 +318,11 @@ async function handleStockClick(btn, el) {
 
   const newValue = type.raw_stock + delta;
   if (newValue < 0) return;
+  if (savingIds.has(typeId)) return;
 
   const prev = type.raw_stock;
   type.raw_stock = newValue;
+  savingIds.add(typeId);
   stockErrors.delete(typeId);
   renderCards(el);
 
@@ -326,11 +331,13 @@ async function handleStockClick(btn, el) {
     .update({ raw_stock: newValue })
     .eq('id', typeId);
 
+  savingIds.delete(typeId);
+
   if (error) {
     type.raw_stock = prev;
     stockErrors.set(typeId, 'Failed to update. Try again.');
-    renderCards(el);
   }
+  renderCards(el);
 }
 
 function wireModal(el) {
