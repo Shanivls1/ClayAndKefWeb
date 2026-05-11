@@ -302,7 +302,35 @@ function buildCard(t) {
 }
 
 function wireStockButtons(el) {
-  // stub — filled in Task 3
+  el.querySelectorAll('.stock-minus, .stock-plus').forEach(btn => {
+    btn.addEventListener('click', () => handleStockClick(btn, el));
+  });
+}
+
+async function handleStockClick(btn, el) {
+  const typeId = btn.dataset.id;
+  const delta  = btn.classList.contains('stock-plus') ? 1 : -1;
+  const type   = allTypes.find(t => t.id === typeId);
+  if (!type) return;
+
+  const newValue = type.raw_stock + delta;
+  if (newValue < 0) return;
+
+  const prev = type.raw_stock;
+  type.raw_stock = newValue;
+  stockErrors.delete(typeId);
+  renderCards(el);
+
+  const { error } = await supabase
+    .from('object_types')
+    .update({ raw_stock: newValue })
+    .eq('id', typeId);
+
+  if (error) {
+    type.raw_stock = prev;
+    stockErrors.set(typeId, 'Failed to update. Try again.');
+    renderCards(el);
+  }
 }
 
 function wireModal(el) {
