@@ -3,7 +3,7 @@ import { supabase } from '../supabase.js';
 // ─── State ───────────────────────────────────────────────────────────────────
 let allTypes = [];
 let inProgressMap = new Map();
-const stockErrors = new Map();
+let stockErrors = new Map();
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function escHtml(str) {
@@ -33,7 +33,7 @@ function skeletonCards() {
 export function render() {
   return `
     <style>
-      @keyframes ck-shimmer {
+      @keyframes ck-shimmer-stock {
         0%   { opacity: 1; }
         50%  { opacity: 0.45; }
         100% { opacity: 1; }
@@ -42,7 +42,7 @@ export function render() {
         display: inline-block;
         background: #e8e1d8;
         border-radius: 4px;
-        animation: ck-shimmer 1.4s ease-in-out infinite;
+        animation: ck-shimmer-stock 1.4s ease-in-out infinite;
       }
       .stock-btn {
         width: 28px; height: 28px;
