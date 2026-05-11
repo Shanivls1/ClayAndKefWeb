@@ -381,6 +381,12 @@ function wireModal(el) {
       return;
     }
 
+    if (price < 0 || raw_stock < 0 || low_stock_alert < 0) {
+      errorDiv.textContent = 'Price, stock, and alert threshold must be 0 or greater.';
+      errorDiv.style.display = 'block';
+      return;
+    }
+
     errorDiv.style.display = 'none';
     submitBtn.disabled = true;
     submitBtn.textContent = 'Adding…';
@@ -408,11 +414,14 @@ function wireModal(el) {
       supabase.from('object_types').select('*').order('category').order('name'),
       supabase.from('objects').select('object_type_id').eq('status', 'received'),
     ]);
-    allTypes = typesResult.data ?? [];
-    inProgressMap = (progressResult.data ?? []).reduce((m, r) => {
-      m.set(r.object_type_id, (m.get(r.object_type_id) ?? 0) + 1);
-      return m;
-    }, new Map());
-    renderCards(el);
+    if (!typesResult.error) {
+      allTypes = typesResult.data ?? [];
+      stockErrors = new Map();
+      inProgressMap = (progressResult.data ?? []).reduce((m, r) => {
+        m.set(r.object_type_id, (m.get(r.object_type_id) ?? 0) + 1);
+        return m;
+      }, new Map());
+      renderCards(el);
+    }
   });
 }
