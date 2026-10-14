@@ -1,3 +1,14 @@
 env.js
 temporary screenshots/
 .superpowers/
+
+# Owner data — contains customer names and phone numbers, never commit
+data1.xlsx
+data1_not_imported.csv
+supabase/import_data1/
+
+# Database connection string (admin access) — never commit
+.env.db
+
+# Local Claude Code settings (machine-specific)
+.claude/

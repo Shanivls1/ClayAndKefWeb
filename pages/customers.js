@@ -1,4 +1,7 @@
 import { supabase } from '../supabase.js';
+import { escHtml, fmtDate, pgQuote, debounce } from '../utils.js';
+import { logEvent } from '../log.js';
+import { LIST_CSS, searchBox, chipGroup, selectBox, clearButton, wireFilters, activeCount, updateClear, renderPager } from '../listui.js';
 
 const AVATAR_COLORS = ['#e8d5c0', '#dcc9b4', '#d4bfaa', '#c8b49e', '#bda892'];
 
@@ -13,6 +16,7 @@ function getInitials(name) {
 
 export function render() {
   return `
+    ${LIST_CSS}
     <style>
       @keyframes ck-shimmer {
         0%   { opacity: 1; }
@@ -40,45 +44,31 @@ export function render() {
       <rect width="100%" height="100%" filter="url(#ck-noise-customers)"/>
     </svg>
     <!-- Radial glow top-right -->
-    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(196,149,106,0.08),transparent);pointer-events:none;z-index:0;"></div>
+    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px;position:relative;z-index:1;">
 
       <!-- Header -->
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;">
         <div>
-          <h1 style="font-family:'Playfair Display',serif;font-size:32px;font-weight:700;letter-spacing:-0.03em;color:#1a120b;margin-bottom:4px;">Customers</h1>
+          <h1 style="font-family:'Caveat',cursive;font-size:42px;font-weight:700;letter-spacing:-0.01em;color:#1a120b;margin-bottom:4px;">Customers</h1>
           <p style="font-family:'Inter',sans-serif;color:#8a7560;font-size:15px;line-height:1.7;">All registered customers and their visit history.</p>
         </div>
         <button id="btn-add-customer" style="
           flex-shrink:0;margin-top:4px;
-          background:#c4956a;color:#fff;border:none;cursor:pointer;
+          background:#9C1A4D;color:#fff;border:none;cursor:pointer;
           font-family:'Inter',sans-serif;font-size:14px;font-weight:500;
           padding:10px 18px;border-radius:8px;letter-spacing:0.01em;
-          box-shadow:0 2px 8px rgba(196,149,106,0.3);
+          box-shadow:0 2px 8px rgba(156,26,77,0.3);
           transition:background 0.15s ease,box-shadow 0.15s ease;
         "
-          onmouseover="this.style.background='#b3845a';this.style.boxShadow='0 2px 12px rgba(196,149,106,0.4)'"
-          onmouseout="this.style.background='#c4956a';this.style.boxShadow='0 2px 8px rgba(196,149,106,0.3)'"
+          onmouseover="this.style.background='#7D1540';this.style.boxShadow='0 2px 12px rgba(156,26,77,0.4)'"
+          onmouseout="this.style.background='#9C1A4D';this.style.boxShadow='0 2px 8px rgba(156,26,77,0.3)'"
         >+ Add Customer</button>
       </div>
 
-      <!-- Search -->
-      <div style="margin-bottom:20px;position:relative;">
-        <input id="customer-search" type="text" placeholder="Search by name or phone…" style="
-          width:100%;padding:10px 16px 10px 42px;
-          font-family:'Inter',sans-serif;font-size:14px;color:#1a120b;
-          background:#fff;border:1px solid #e0d8cf;border-radius:99px;
-          outline:none;box-shadow:0 1px 3px rgba(0,0,0,0.04);
-          transition:border-color 0.15s ease,box-shadow 0.15s ease;
-        "
-          onfocus="this.style.borderColor='#c4956a';this.style.boxShadow='0 0 0 3px rgba(196,149,106,0.15)'"
-          onblur="this.style.borderColor='#e0d8cf';this.style.boxShadow='0 1px 3px rgba(0,0,0,0.04)'"
-        />
-        <svg style="position:absolute;left:16px;top:50%;transform:translateY(-50%);width:16px;height:16px;stroke:#8a7560;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;" viewBox="0 0 24 24">
-          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-        </svg>
-      </div>
+      <!-- Filters -->
+      <div id="cust-filters" class="fbar"></div>
 
       <!-- Customer list -->
       <div style="background:#fff;border-radius:14px;border:1px solid #e8e1d8;overflow:hidden;box-shadow:0 2px 6px rgba(45,31,20,0.08),0 8px 24px rgba(45,31,20,0.05);">
@@ -86,6 +76,8 @@ export function render() {
           ${skeletonRows()}
         </div>
       </div>
+
+      <div id="customers-pagination"></div>
 
     </div>
 
@@ -111,26 +103,26 @@ export function render() {
           onmouseout="this.style.background='none'"
         >×</button>
 
-        <h2 style="font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#1a120b;margin-bottom:24px;">Add Customer</h2>
+        <h2 style="font-family:'Inter',sans-serif;font-size:22px;font-weight:700;color:#1a120b;margin-bottom:24px;">Add Customer</h2>
 
         <form id="add-customer-form" autocomplete="off">
           <div style="margin-bottom:16px;">
             <label style="display:block;font-size:13px;font-weight:500;color:#5a4a3a;margin-bottom:6px;">
-              Name <span style="color:#c4956a">*</span>
+              Name <span style="color:#9C1A4D">*</span>
             </label>
             <input name="name" type="text" required placeholder="e.g. Dana Cohen" style="
               width:100%;padding:10px 14px;font-family:'Inter',sans-serif;font-size:14px;
               border:1px solid #e0d8cf;border-radius:10px;outline:none;color:#1a120b;
               transition:border-color 0.15s;
             "
-              onfocus="this.style.borderColor='#c4956a'"
+              onfocus="this.style.borderColor='#9C1A4D'"
               onblur="this.style.borderColor='#e0d8cf'"
             />
           </div>
 
           <div style="margin-bottom:16px;">
             <label style="display:block;font-size:13px;font-weight:500;color:#5a4a3a;margin-bottom:6px;">
-              Phone <span style="color:#c4956a">*</span>
+              Phone <span style="color:#9C1A4D">*</span>
               <span style="font-weight:400;color:#8a7560">(include country code)</span>
             </label>
             <input name="phone" type="tel" required placeholder="e.g. +972-50-123-4567" style="
@@ -138,7 +130,7 @@ export function render() {
               border:1px solid #e0d8cf;border-radius:10px;outline:none;color:#1a120b;
               transition:border-color 0.15s;
             "
-              onfocus="this.style.borderColor='#c4956a'"
+              onfocus="this.style.borderColor='#9C1A4D'"
               onblur="this.style.borderColor='#e0d8cf'"
             />
           </div>
@@ -152,7 +144,7 @@ export function render() {
               border:1px solid #e0d8cf;border-radius:10px;outline:none;color:#1a120b;
               resize:vertical;transition:border-color 0.15s;
             "
-              onfocus="this.style.borderColor='#c4956a'"
+              onfocus="this.style.borderColor='#9C1A4D'"
               onblur="this.style.borderColor='#e0d8cf'"
             ></textarea>
           </div>
@@ -160,13 +152,13 @@ export function render() {
           <div id="form-error" style="display:none;color:#b94040;font-size:13px;margin-bottom:12px;"></div>
 
           <button type="submit" id="btn-submit" style="
-            width:100%;padding:12px;background:#c4956a;color:#fff;border:none;cursor:pointer;
+            width:100%;padding:12px;background:#9C1A4D;color:#fff;border:none;cursor:pointer;
             font-family:'Inter',sans-serif;font-size:14px;font-weight:600;letter-spacing:0.01em;
-            border-radius:8px;box-shadow:0 2px 8px rgba(196,149,106,0.3);
+            border-radius:8px;box-shadow:0 2px 8px rgba(156,26,77,0.3);
             transition:background 0.15s ease;
           "
-            onmouseover="this.style.background='#b3845a'"
-            onmouseout="this.style.background='#c4956a'"
+            onmouseover="this.style.background='#7D1540'"
+            onmouseout="this.style.background='#9C1A4D'"
           >Add Customer</button>
         </form>
       </div>
@@ -189,28 +181,56 @@ function skeletonRows() {
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
-let allCustomers = [];
+const DEFAULTS = { q: '', kind: 'all', open: 'all', sort: 'name' };
+let filters      = { ...DEFAULTS };
+let currentPage  = 1;
+let pageSize     = 10;
+let totalCount   = 0;
+let loadSeq      = 0; // ignores responses from superseded searches
+let pageSignal   = null;
+
+const SORTS = {
+  name:   { label: 'Name A–Z',    apply: q => q.order('name') },
+  recent: { label: 'Last visit',  apply: q => q.order('last_visit', { ascending: false, nullsFirst: false }).order('name') },
+  visits: { label: 'Most visits', apply: q => q.order('visits', { ascending: false }).order('name') },
+};
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
 
-export async function mount(el) {
+export async function mount(el, signal) {
+  pageSignal  = signal;
+  currentPage = 1;
+  filters     = { ...DEFAULTS };
+  renderFilters(el);
+  wireModal(el, signal);
   await loadCustomers(el);
-  wireSearch(el);
-  wireModal(el);
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
 async function loadCustomers(el) {
-  allCustomers = [];
   const list = el.querySelector('#customers-list');
+  list.innerHTML = skeletonRows();
 
-  const { data, error } = await supabase
-    .from('customers')
-    .select('id, name, phone, notes, objects(id, received_at)')
-    .order('name');
+  const q    = filters.q.trim().toLowerCase();
+  const from = (currentPage - 1) * pageSize;
+
+  // customer_list: one row per customer with visits, pieces, last visit and uncollected orders
+  let query = supabase
+    .from('customer_list')
+    .select('id, name, phone, notes, visits, pieces, last_visit, open_orders', { count: 'exact' });
+  if (q) query = query.or(`name.ilike.${pgQuote(`%${q}%`)},phone.ilike.${pgQuote(`%${q}%`)}`);
+  if (filters.kind === 'returning') query = query.gt('pieces', 1);   // returning = more than one piece overall
+  if (filters.kind === 'new')       query = query.lte('pieces', 1);
+  if (filters.open === 'yes')       query = query.gt('open_orders', 0);
+  query = SORTS[filters.sort].apply(query).order('id').range(from, from + pageSize - 1);
+
+  const seq = ++loadSeq;
+  const { data, error, count } = await query;
+  if (seq !== loadSeq || pageSignal?.aborted) return;
 
   if (error) {
+    logEvent('error', `Couldn't load customers: ${error.message}`);
     list.innerHTML = `
       <div style="padding:32px 20px;text-align:center;font-family:'Inter',sans-serif;font-size:14px;color:#8a7560;">
         Failed to load customers. Please try again.
@@ -218,8 +238,9 @@ async function loadCustomers(el) {
     return;
   }
 
-  allCustomers = data ?? [];
-  renderRows(list, allCustomers);
+  totalCount = count ?? 0;
+  renderRows(list, data ?? []);
+  renderPagination(el);
 }
 
 function renderRows(list, customers) {
@@ -234,27 +255,22 @@ function renderRows(list, customers) {
 }
 
 function buildRow(c, isLast) {
-  const objects     = c.objects ?? [];
-  const total       = objects.length;
-  const isReturning = total > 1;
+  const pieces      = Number(c.pieces ?? 0);
+  const visits      = Number(c.visits ?? 0);
+  const open        = Number(c.open_orders ?? 0);
+  const isReturning = pieces > 1;
 
   const initials  = getInitials(c.name);
   const avatarBg  = AVATAR_COLORS[(c.name?.charCodeAt(0) ?? 65) % AVATAR_COLORS.length];
-  const objLabel  = `${total} object${total !== 1 ? 's' : ''}`;
+  const objLabel  = `${visits} visit${visits !== 1 ? 's' : ''} · ${pieces} piece${pieces !== 1 ? 's' : ''}`;
+  const lastVisit = fmtDate(c.last_visit);
 
-  let lastVisit = '';
-  if (objects.length > 0) {
-    const maxMs = Math.max(...objects.map(o => new Date(o.received_at).getTime()));
-    lastVisit = new Date(maxMs).toLocaleDateString('en-GB', {
-      day: 'numeric', month: 'short', year: 'numeric'
-    });
-  }
-
-  const rightEl = isReturning
-    ? `<span style="display:inline-block;padding:3px 10px;background:rgba(196,149,106,0.15);color:#c4956a;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap;">Returning</span>`
-    : lastVisit
-      ? `<span style="font-size:13px;color:#b0a090;white-space:nowrap;">${escHtml(lastVisit)}</span>`
-      : '';
+  const pill = (text, style) => `<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap;${style}">${text}</span>`;
+  const rightEl = `<div style="display:flex;align-items:center;gap:8px;">
+      ${open ? pill(`${open} to collect`, 'background:rgba(47,138,74,0.12);color:#2f8a4a;') : ''}
+      ${isReturning ? pill('Returning', 'background:rgba(156,26,77,0.12);color:#9C1A4D;') : ''}
+      ${lastVisit ? `<span style="font-size:13px;color:#b0a090;white-space:nowrap;min-width:92px;text-align:right;">${escHtml(lastVisit)}</span>` : ''}
+    </div>`;
 
   const borderBottom = isLast ? 'none' : '1px solid #f5f0eb';
 
@@ -265,37 +281,47 @@ function buildRow(c, isLast) {
       <div style="width:36px;height:36px;border-radius:50%;background:${avatarBg};display:flex;align-items:center;justify-content:center;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:#7a5530;flex-shrink:0;user-select:none;">${escHtml(initials)}</div>
       <div style="flex:1;min-width:0;">
         <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:600;color:#1a120b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.name)}</div>
-        <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.phone)} · ${objLabel}</div>
+        <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.phone || 'No phone')} · ${objLabel}</div>
       </div>
       <div style="flex-shrink:0;">${rightEl}</div>
     </div>`;
 }
 
-function escHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+function renderPagination(el) {
+  renderPager(el.querySelector('#customers-pagination'), {
+    page: currentPage, pageSize, total: totalCount, noun: 'customers',
+    onPage: n => { currentPage = n; loadCustomers(el); },
+    onPageSize: n => { pageSize = n; currentPage = 1; loadCustomers(el); },
+  });
 }
 
-// ─── Search ───────────────────────────────────────────────────────────────────
+// ─── Filters ──────────────────────────────────────────────────────────────────
 
-function wireSearch(el) {
-  const input = el.querySelector('#customer-search');
-  const list  = el.querySelector('#customers-list');
-  input.addEventListener('input', () => {
-    const q = input.value.trim().toLowerCase();
-    const filtered = q
-      ? allCustomers.filter(c =>
-          c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q)
-        )
-      : allCustomers;
-    renderRows(list, filtered);
+function renderFilters(el) {
+  const box = el.querySelector('#cust-filters');
+  box.innerHTML = `
+    <div class="fbar-row">
+      ${searchBox('customer-search', 'Search by name or phone…', filters.q)}
+      ${selectBox('sort', 'Sort', Object.entries(SORTS).map(([k, v]) => [k, v.label]), filters.sort)}
+    </div>
+    <div class="fbar-row">
+      ${chipGroup('kind', 'Customers', [['all', 'All'], ['returning', 'Returning'], ['new', 'New']], filters.kind)}
+      ${chipGroup('open', 'Pieces to collect', [['all', 'Any'], ['yes', 'Has pieces waiting']], filters.open)}
+      ${clearButton(activeCount(filters, DEFAULTS))}
+    </div>`;
+  const reload = () => { currentPage = 1; updateClear(box, activeCount(filters, DEFAULTS)); loadCustomers(el); };
+  box.querySelector('#customer-search').addEventListener('input', debounce(e => { filters.q = e.target.value; reload(); }, 250));
+  wireFilters(box, (name, value) => { filters[name] = value; reload(); }, () => {
+    filters = { ...DEFAULTS, sort: filters.sort };
+    renderFilters(el);
+    currentPage = 1;
+    loadCustomers(el);
   });
 }
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
-function wireModal(el) {
+function wireModal(el, signal) {
   const backdrop  = el.querySelector('#modal-backdrop');
   const closeBtn  = el.querySelector('#modal-close');
   const addBtn    = el.querySelector('#btn-add-customer');
@@ -316,6 +342,7 @@ function wireModal(el) {
   addBtn.addEventListener('click', openModal);
   closeBtn.addEventListener('click', closeModal);
   backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); }, { signal });
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
@@ -341,14 +368,16 @@ function wireModal(el) {
     submitBtn.textContent = 'Add Customer';
 
     if (error) {
+      logEvent('error', `Couldn't add customer ${name}: ${error.message}`);
       errorDiv.textContent = 'Failed to add customer: ' + error.message;
       errorDiv.style.display = 'block';
       return;
     }
 
     closeModal();
-    const searchInput = el.querySelector('#customer-search');
-    if (searchInput) searchInput.value = '';
+    filters = { ...DEFAULTS, sort: filters.sort };
+    renderFilters(el);
+    currentPage = 1;
     await loadCustomers(el);
   });
 }

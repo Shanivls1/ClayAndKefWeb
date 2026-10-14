@@ -1,3 +1,58 @@
+# Objects Page Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build `pages/objects.js` — a fully functional object tracking page with a filterable table, per-row status advance, WhatsApp notification indicator, and Add Object modal.
+
+**Architecture:** Single-file page module (`render` + `mount`) following the exact pattern of `pages/customers.js`. All data fetched at mount into module-level arrays, filtered client-side. No pagination, no realtime subscription.
+
+**Tech Stack:** Vanilla JS ES modules, Supabase JS v2 (`supabase.js` singleton), inline styles, hash router (`router.js`). No test runner — browser verification after each task.
+
+**Note on `notes` column:** The `objects` table in CLAUDE.md does not have a `notes` column. Task 1 adds it via Supabase SQL before any code is written. Skip Task 1 if the column already exists.
+
+---
+
+## File Map
+
+| File | Action | Responsibility |
+|---|---|---|
+| `pages/objects.js` | Rewrite | Full page: render shell, data fetch, filters, status advance, WhatsApp indicator, Add Object modal |
+
+No other files need changes.
+
+---
+
+### Task 1: Add `notes` column to `objects` table in Supabase
+
+**Files:**
+- No code files — run SQL in Supabase dashboard
+
+- [ ] **Step 1: Open Supabase SQL editor**
+
+Navigate to your Supabase project → SQL Editor → New Query.
+
+- [ ] **Step 2: Run migration**
+
+```sql
+ALTER TABLE objects ADD COLUMN IF NOT EXISTS notes text;
+```
+
+- [ ] **Step 3: Verify**
+
+In the Supabase Table Editor, open the `objects` table and confirm `notes` column appears.
+
+---
+
+### Task 2: Static render shell
+
+**Files:**
+- Rewrite: `pages/objects.js`
+
+- [ ] **Step 1: Replace the stub with the full render shell**
+
+Replace the entire contents of `pages/objects.js` with:
+
+```js
 import { supabase } from '../supabase.js';
 
 // ─── Status config ─────────────────────────────────────────────────────────────
@@ -236,6 +291,52 @@ function escAttr(str) {
   return String(str ?? '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+export async function mount(el) {
+  // stub — wired in later tasks
+}
+```
+
+- [ ] **Step 2: Start the dev server (if not already running)**
+
+```bash
+node serve.mjs
+```
+
+Expected: `Serving on http://localhost:3000`
+
+- [ ] **Step 3: Screenshot to verify layout**
+
+```bash
+node screenshot.mjs http://localhost:3000/#/objects task2-shell
+```
+
+Open `temporary screenshots/screenshot-N-task2-shell.png`. Verify:
+- "Objects" heading and "+ Add Object" button in header
+- Search input + two filter selects in filter bar
+- Table with 5 column headers and 4 shimmer skeleton rows
+- Legend strip (Waiting / Ready / Picked Up) below table
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add pages/objects.js
+git commit -m "feat(objects): render shell with table, filters, and add-object modal"
+```
+
+---
+
+### Task 3: Data fetching and real rows
+
+**Files:**
+- Modify: `pages/objects.js`
+
+Add all data-fetching functions and replace the `mount` stub. Append the following to `pages/objects.js` (replacing the stub `mount`):
+
+- [ ] **Step 1: Replace mount and add data functions**
+
+Replace the stub `export async function mount(el) { ... }` at the bottom of `pages/objects.js` with:
+
+```js
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 export async function mount(el) {
@@ -325,7 +426,7 @@ function buildRow(o, isLast) {
 
   const rowBg = isReady ? '#f9fdf7' : '#fff';
 
-  const badge = `<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;font-family:'Inter',sans-serif;${STATUS_BADGE[o.status] ?? ''}">${STATUS_LABEL[o.status] ?? o.status}</span>`;
+  const badge = `<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;font-family:'Inter',sans-serif;${STATUS_BADGE[o.status]}">${STATUS_LABEL[o.status] ?? o.status}</span>`;
 
   let waIndicator = '';
   if (isReady) {
@@ -451,7 +552,7 @@ async function notifyCustomer(objectId, obj, el) {
     await supabase.from('objects').update({ notified_at: now }).eq('id', objectId);
     obj.notified_at = now;
   } catch {
-    // notified_at stays null → red indicator shown via applyFilters
+    // notified_at stays null → red indicator shown
   }
   applyFilters(el);
 }
@@ -491,16 +592,11 @@ function wireModal(el) {
     backdrop.style.display = 'flex';
   }
 
-  function closeModal() {
-    backdrop.style.display = 'none';
-  }
+  function closeModal() { backdrop.style.display = 'none'; }
 
   addBtn.addEventListener('click', openModal);
   closeBtn.addEventListener('click', closeModal);
   backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
-  const onKeydown = e => { if (e.key === 'Escape') closeModal(); };
-  document.addEventListener('keydown', onKeydown);
-  window.addEventListener('hashchange', () => document.removeEventListener('keydown', onKeydown), { once: true });
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
@@ -552,3 +648,82 @@ function wireModal(el) {
     await loadObjects(el);
   });
 }
+```
+
+- [ ] **Step 2: Screenshot to verify real data loads**
+
+```bash
+node screenshot.mjs http://localhost:3000/#/objects task3-data
+```
+
+Open the screenshot. Verify:
+- Real customer names and object type names appear in the table
+- Status badges show "Waiting", "Ready", or "Picked Up" correctly
+- "Ready" rows have a faint green background
+- "Picked Up" rows are dimmed
+- Ready rows with `notified_at` show green "Message sent"; those without show red "Message not sent"
+
+- [ ] **Step 3: Test filters in browser**
+
+In the browser at `http://localhost:3000/#/objects`:
+- Type a customer name in the search box → table filters in real time
+- Select "Waiting" from the status dropdown → only Waiting rows show
+- Select an object type → only that type shows
+- Clear all filters → all rows return
+
+- [ ] **Step 4: Test status advance in browser**
+
+Find a "Waiting" row. Select "Ready" from its Advance dropdown.
+- Row badge should immediately change to "Ready" (green)
+- Row background should become green-tinted
+- WhatsApp indicator should appear (green if Edge Function succeeds, red if it fails)
+- Supabase `objects` table should show `status = 'ready'`
+
+Find a "Ready" row. Select "Picked Up".
+- Row should dim immediately
+- Advance cell should change to "— complete —"
+- Supabase should show `status = 'picked_up'` and `picked_up_at` set
+
+- [ ] **Step 5: Test Add Object modal in browser**
+
+Click "+ Add Object":
+- Modal opens with customer and object type dropdowns populated
+- Date In defaults to today
+- Fill all fields and submit
+- Row appears in table with "Waiting" status
+- In Supabase, `object_types.raw_stock` for the chosen type is decremented by 1
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add pages/objects.js
+git commit -m "feat(objects): full objects page — table, filters, status advance, WhatsApp indicator, add-object modal"
+```
+
+---
+
+## Self-Review
+
+**Spec coverage check:**
+
+| Requirement | Covered |
+|---|---|
+| Table: customer name, object type, status badge, date in, batch label | ✓ (batch removed per design decision) |
+| Filter by status | ✓ `#obj-filter-status` |
+| Filter by object type | ✓ `#obj-filter-type` + `#obj-search` |
+| Status dropdown per row — next status only | ✓ `STATUS_NEXT` map, only one option in dropdown |
+| Enforce order, no skipping | ✓ dropdown only exposes one valid next status |
+| On ready: call notify-customer Edge Function | ✓ `notifyCustomer()` |
+| On ready: set notified_at | ✓ after Edge Function success |
+| WhatsApp indicator inline under Ready badge | ✓ `waIndicator` in `buildRow` |
+| Add Object: decrement raw_stock | ✓ in modal submit handler |
+| Add Object form: customer, type, date, notes | ✓ all four fields |
+| Skeleton loading | ✓ `skeletonRows()` shown until `loadObjects` resolves |
+| Empty state | ✓ "No objects found." message |
+| Fetch error state | ✓ error message in table body |
+| Status update failure → revert | ✓ in `wireAdvanceDropdowns` |
+| picked_up_at set on pickup | ✓ `updatePayload.picked_up_at` |
+
+**Placeholder scan:** No TBDs or incomplete steps. All code blocks are complete. ✓
+
+**Type consistency:** `STATUS_LABEL`, `STATUS_NEXT`, `STATUS_BADGE` defined once at top and used consistently throughout. `obj.object_types?.id` used for type filter match, `allObjectTypes` populated in `loadObjectTypes`. ✓

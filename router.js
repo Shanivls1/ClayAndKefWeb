@@ -1,4 +1,7 @@
+import { logEvent } from './log.js';
+
 const routes = new Map();
+let current = null; // AbortController of the mounted page
 
 export function register(path, page) {
   routes.set(path, page);
@@ -12,19 +15,33 @@ export function navigate(path) {
   }
 }
 
+// Each page gets a fresh container and an AbortSignal. The signal aborts when the
+// user navigates away: pages pass it to document/window listeners so they are removed,
+// and check `signal.aborted` after awaits so late responses don't touch the new page.
 function resolve() {
   const hash = location.hash.slice(1) || '/dashboard';
   if (!routes.has(hash)) {
     location.hash = '/dashboard';
     return;
   }
+  const content = document.getElementById('content');
+  if (!content) throw new Error('router: #content element not found in DOM');
+
+  current?.abort();
+  current = new AbortController();
+  const { signal } = current;
+
   const page = routes.get(hash);
-  const el = document.getElementById('content');
-  if (!el) throw new Error('router: #content element not found in DOM');
-  el.innerHTML = page.render();
-  if (page.mount) Promise.resolve(page.mount(el)).catch(err => console.error('[router] mount() failed:', err));
-  document.querySelectorAll('[data-route]').forEach(el => {
-    el.classList.toggle('active', el.dataset.route === hash);
+  const view = document.createElement('div');
+  view.innerHTML = page.render();
+  content.replaceChildren(view);
+
+  if (page.mount) {
+    Promise.resolve(page.mount(view, signal))
+      .catch(err => logEvent('error', `Page ${hash} failed to load: ${err?.message ?? err}`, { stack: err?.stack }));
+  }
+  document.querySelectorAll('[data-route]').forEach(a => {
+    a.classList.toggle('active', a.dataset.route === hash);
   });
 }
 
