@@ -85,7 +85,7 @@ export function render() {
       <rect width="100%" height="100%" filter="url(#ck-noise-dash)"/>
     </svg>
     <div style="position:fixed;top:0;right:0;width:600px;height:400px;
-      background:radial-gradient(ellipse at top right,rgba(156,26,77,.08),transparent);
+      background:radial-gradient(ellipse farthest-side at top right,rgba(156,26,77,.08),transparent);
       pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px;position:relative;z-index:1;">

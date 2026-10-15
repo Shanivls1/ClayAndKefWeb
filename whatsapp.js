@@ -20,6 +20,10 @@ export function normalizePhone(phone) {
 // Placeholders are filled in per order.
 export const DEFAULT_MESSAGE = 'היי {name}! 🎨 ההזמנה שלך ({order}) מוכנה לאיסוף ב-Clay & Kef: {pieces}. נתראה!';
 
+// Pickup reminders, offered when the customer was told but hasn't come (Settings → reminderDays apart)
+export const DEFAULT_REMINDER1 = 'היי {name} 😊 רק מזכירים — ההזמנה שלך ({order}) מחכה לך ב-Clay & Kef: {pieces}. נשמח לראות אותך!';
+export const DEFAULT_REMINDER2 = 'היי {name}, ההזמנה שלך ({order}) עדיין מחכה לאיסוף ב-Clay & Kef: {pieces}. נשמח אם תעבור/י לאסוף אותה בהקדם 🙏';
+
 export const PLACEHOLDERS = [
   { key: '{name}',   label: "Customer's first name" },
   { key: '{order}',  label: 'Order number' },

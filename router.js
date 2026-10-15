@@ -18,10 +18,11 @@ export function navigate(path) {
 // Each page gets a fresh container and an AbortSignal. The signal aborts when the
 // user navigates away: pages pass it to document/window listeners so they are removed,
 // and check `signal.aborted` after awaits so late responses don't touch the new page.
+// "#/orders?wa=remind" → page "/orders"; the page reads the "?…" part itself.
 function resolve() {
-  const hash = location.hash.slice(1) || '/dashboard';
+  const hash = location.hash.slice(1).split('?')[0] || '/home';
   if (!routes.has(hash)) {
-    location.hash = '/dashboard';
+    location.hash = '/home';
     return;
   }
   const content = document.getElementById('content');

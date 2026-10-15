@@ -25,7 +25,7 @@ const CATEGORY = {
   info:         { label: 'Info',     style: 'background:#ede8e2;color:#8a7560;' },
 };
 
-const STATUS_LABEL = { received: 'Waiting', ready: 'Ready', picked_up: 'Picked up' };
+const STATUS_LABEL = { received: 'Waiting', ready: 'Ready', picked_up: 'Collected' };
 const HIDDEN_FIELDS = new Set(['id', 'created_at']);
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ export function render() {
       </filter>
       <rect width="100%" height="100%" filter="url(#ck-noise-logs)"/>
     </svg>
-    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
+    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse farthest-side at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px;position:relative;z-index:1;">
       <div style="margin-bottom:24px;">
@@ -258,6 +258,12 @@ function describe(e) {
       const who = customersById.get(row.customer_id)?.name;
       if (e.action === 'INSERT') return `${b(orderLabel(row))} created${who ? ` for ${escHtml(who)}` : ''}`;
       if (e.action === 'DELETE') return `${b(orderLabel(row))} deleted${who ? ` (${escHtml(who)})` : ''}`;
+      const reminders = ['reminder1_at', 'reminder2_at'].filter(c => changed.includes(c));
+      if (reminders.length) {
+        const n = reminders.includes('reminder2_at') ? 2 : 1;
+        const text = row[`reminder${n}_at`] ? `Pickup reminder ${n} sent` : `Pickup reminder ${n} cleared`;
+        return `${b(orderLabel(row))}: ${text}${who ? ` (${escHtml(who)})` : ''}` + others(changed.filter(c => !reminders.includes(c)));
+      }
       return `${b(orderLabel(row))} updated${others(changed)}`;
     }
     case 'customers': {

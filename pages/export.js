@@ -151,7 +151,7 @@ export function render() {
       </filter>
       <rect width="100%" height="100%" filter="url(#ck-noise-export)"/>
     </svg>
-    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(156,26,77,0.07),transparent);pointer-events:none;z-index:0;"></div>
+    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse farthest-side at top right,rgba(156,26,77,0.07),transparent);pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px;position:relative;z-index:1;max-width:960px;">
 
@@ -207,7 +207,7 @@ export function render() {
             </div>
           </div>
           <div class="export-field-list">
-            ${['Customer','Object Type','Status','Received','Notified','Picked Up','Notes'].map(f=>`<span class="export-field-tag">${f}</span>`).join('')}
+            ${['Customer','Object Type','Status','Received','Notified','Collected','Notes'].map(f=>`<span class="export-field-tag">${f}</span>`).join('')}
           </div>
           <button id="btn-dl-objects" class="export-dl-btn">
             <div class="export-spin" id="btn-dl-objects-spin"></div>
@@ -314,7 +314,7 @@ async function downloadObjects(el) {
 
     if (error) throw new Error(error.message);
 
-    const STATUS_LABEL = { received: 'Waiting', ready: 'Ready', picked_up: 'Picked Up' };
+    const STATUS_LABEL = { received: 'Waiting', ready: 'Ready', picked_up: 'Collected' };
 
     // Newest orders first (by date — order numbers restart after 100)
     const sorted = (data ?? []).sort((a, b) => String(b.orders?.received_at ?? '').localeCompare(String(a.orders?.received_at ?? '')));
@@ -328,7 +328,7 @@ async function downloadObjects(el) {
       'Container':   o.container ?? '',
       'Received':    fmtDate(o.orders?.received_at),
       'Notified':    fmtDate(o.notified_at),
-      'Picked Up':   fmtDate(o.picked_up_at),
+      'Collected':   fmtDate(o.picked_up_at),
       'Notes':       o.notes ?? '',
     }));
 

@@ -1,10 +1,24 @@
 import { escHtml } from '../utils.js';
 import { logEvent } from '../log.js';
 import { loadSettings, saveSettings, settings, settingsProblem, DEFAULTS } from '../settings.js';
-import { buildReadyMessage, DEFAULT_MESSAGE, PLACEHOLDERS } from '../whatsapp.js';
+import { buildReadyMessage, PLACEHOLDERS } from '../whatsapp.js';
+import { refreshRemindBadge } from '../navbadge.js';
+import { supabase } from '../supabase.js';
+import { confirmDanger, deleteStyles } from '../confirm.js';
 
 // Sample order used for the message preview
 const SAMPLE = { name: 'Dana Cohen', order: 12, pieces: ['Medium Cup', 'Medium Cup', 'Bowl'] };
+
+// The three messages, edited one at a time in the message card
+const MESSAGES = [
+  { key: 'messageTemplate',   tab: 'Order ready', saved: 'WhatsApp message',
+    when: () => 'Sent when every piece of an order is ready.' },
+  { key: 'reminder1Template', tab: 'Reminder 1',  saved: 'reminder 1',
+    when: d => `Offered ${d} days after the “ready” message, if the order hasn’t been collected.` },
+  { key: 'reminder2Template', tab: 'Reminder 2',  saved: 'reminder 2',
+    when: d => `Offered ${d} days after reminder 1, if the order still hasn’t been collected. It’s the last one.` },
+];
+let msgKey = 'messageTemplate';
 
 const TOGGLES = [
   {
@@ -21,9 +35,15 @@ const TOGGLES = [
     needs: 'confirmSent',
   },
   {
+    key: 'reminders',
+    title: 'Pickup reminders',
+    on:  'Orders told they’re ready but not collected get a “Send reminder” button after a while — twice, then no more.',
+    off: 'No reminders are offered.',
+  },
+  {
     key: 'undoBar',
     title: 'Undo bar after changes',
-    on:  'Marking pieces ready or picked up shows a bar with Undo (and Send WhatsApp when an order is all ready).',
+    on:  'Marking pieces ready or collected shows a bar with Undo (and Send WhatsApp when an order is all ready).',
     off: 'Changes happen quietly. Errors still show.',
   },
 ];
@@ -66,6 +86,23 @@ export function render() {
       .ph-chip:active { transform:scale(.95); }
       .ph-chip:focus-visible { outline:2px solid #9C1A4D;outline-offset:2px; }
       .msg-hint { margin-top:10px;font-family:'Inter',sans-serif;font-size:12px;color:#b45309;display:none; }
+      .msg-tabs { display:inline-flex;gap:2px;padding:3px;border-radius:11px;background:#f3ede6;margin:0 0 10px; }
+      .msg-tab {
+        border:none;background:none;padding:7px 14px;border-radius:8px;cursor:pointer;
+        font-family:'Inter',sans-serif;font-size:13px;font-weight:500;color:#7a6550;
+        transition:transform .18s cubic-bezier(.34,1.56,.64,1);
+      }
+      .msg-tab:hover { color:#1a120b; }
+      .msg-tab:active { transform:scale(.96); }
+      .msg-tab:focus-visible { outline:2px solid #9C1A4D;outline-offset:1px; }
+      .msg-tab[aria-selected="true"] { background:#fff;color:#1a120b;font-weight:600;box-shadow:0 1px 3px rgba(45,31,20,.12); }
+      .msg-tab.off { opacity:.5; }
+      .days-row { display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:'Inter',sans-serif;font-size:14px;color:#3a2c1f; }
+      .days-row input {
+        width:72px;padding:8px 10px;border:1px solid #e0d8cf;border-radius:10px;text-align:center;
+        font-family:'Inter',sans-serif;font-size:15px;font-weight:600;color:#1a120b;outline:none;
+      }
+      .days-row input:focus { border-color:#9C1A4D;box-shadow:0 0 0 3px rgba(156,26,77,.12); }
 
       /* WhatsApp-style preview */
       .wa-phone { background:#efe7dd;border-radius:14px;padding:18px 16px;min-height:132px;
@@ -110,6 +147,15 @@ export function render() {
       }
       .cont-add input:focus { border-color:#9C1A4D;box-shadow:0 0 0 3px rgba(156,26,77,.12); }
 
+      /* People with access */
+      .team-list { display:flex;flex-direction:column; }
+      .team-row { display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid #f3eee8;font-family:'Inter',sans-serif; }
+      .team-row:first-child { border-top:none;padding-top:0; }
+      .team-row .who { flex:1;min-width:0; }
+      .team-row .em { font-size:14px;font-weight:600;color:#1a120b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+      .team-row .em small { font-weight:500;color:#9C1A4D;margin-left:6px;font-size:12px; }
+      .team-row .when { font-size:12.5px;color:#a09080;margin-top:2px; }
+
       /* Feature switches */
       .tg-row { display:flex;align-items:flex-start;gap:16px;padding:16px 0;border-top:1px solid #f3eee8; }
       .tg-row:first-of-type { border-top:none;padding-top:4px; }
@@ -140,7 +186,7 @@ export function render() {
       </filter>
       <rect width="100%" height="100%" filter="url(#ck-noise-settings)"/>
     </svg>
-    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
+    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse farthest-side at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px;position:relative;z-index:1;">
       <div class="set-wrap">
@@ -155,8 +201,11 @@ export function render() {
         </div>
 
         <section class="set-card" aria-labelledby="msg-title">
-          <h2 id="msg-title">WhatsApp message</h2>
-          <p class="lead">Sent when every piece of an order is ready. Click a field to insert it where your cursor is.</p>
+          <h2 id="msg-title">WhatsApp messages</h2>
+          <div class="msg-tabs" role="tablist" aria-label="Which message">
+            ${MESSAGES.map(m => `<button type="button" class="msg-tab" role="tab" data-msg="${m.key}" aria-selected="${m.key === msgKey}">${escHtml(m.tab)}</button>`).join('')}
+          </div>
+          <p class="lead" id="msg-when"></p>
           <div class="msg-grid">
             <div>
               <label class="msg-label" for="msg-input">Message</label>
@@ -178,6 +227,19 @@ export function render() {
           </div>
         </section>
 
+        <section class="set-card" aria-labelledby="rem-title">
+          <h2 id="rem-title">Pickup reminders</h2>
+          <p class="lead">When a customer was told their order is ready but hasn’t come, the Orders page offers a reminder —
+            and a second one later. Edit their text in the Reminder 1 and Reminder 2 tabs above. Turn them on or off under Orders page helpers.</p>
+          <form class="days-row" id="days-form">
+            <label for="days-input">Wait</label>
+            <input id="days-input" type="number" min="1" max="90" step="1" inputmode="numeric" />
+            <span>days before each reminder</span>
+            <button type="submit" class="btn-primary" id="days-save" disabled>Save</button>
+            <span class="set-status" id="days-status" role="status"></span>
+          </form>
+        </section>
+
         <section class="set-card" aria-labelledby="cont-title">
           <h2 id="cont-title">Containers</h2>
           <p class="lead">Where ready pieces are kept. You choose one each time you mark pieces ready — single letters can be picked with the keyboard.</p>
@@ -195,6 +257,18 @@ export function render() {
           <p class="lead">Turn off what you don’t need. Changes save right away.</p>
           <div id="toggles"></div>
         </section>
+
+        <section class="set-card" aria-labelledby="team-title">
+          <h2 id="team-title">People with access</h2>
+          <p class="lead">Only these accounts can sign in and see the shop’s data. To add someone, first create their account in
+            Supabase → Authentication → Users → <strong>Add user</strong> (email + password, tick “Auto Confirm User”), then add the same email here.</p>
+          <div class="team-list" id="team-list"><span class="tg-desc">Loading…</span></div>
+          <form class="cont-add" id="team-add" style="margin-top:16px;">
+            <input id="team-email" type="email" maxlength="200" placeholder="Email of their Supabase account" aria-label="Email to give access" autocomplete="off" />
+            <button type="submit" class="btn-primary" id="team-add-btn" disabled>Give access</button>
+            <span class="set-status" id="team-status" role="status"></span>
+          </form>
+        </section>
       </div>
     </div>
   `;
@@ -207,8 +281,11 @@ export async function mount(el, signal) {
   if (signal.aborted) return;
   el.querySelector('#set-banner').style.display = settingsProblem() ? 'block' : 'none';
   wireMessage(el);
+  wireDays(el);
   wireContainers(el);
   renderToggles(el);
+  deleteStyles();
+  wireTeam(el, signal);
 }
 
 // ─── Containers ───────────────────────────────────────────────────────────────
@@ -269,12 +346,42 @@ function wireMessage(el) {
   const status  = el.querySelector('#msg-status');
   const preview = el.querySelector('#msg-preview');
   const hint    = el.querySelector('#msg-hint');
-  input.value = settings().messageTemplate;
+  const drafts  = {};   // unsaved text per tab, kept while switching tabs
+  const msg = () => MESSAGES.find(m => m.key === msgKey);
+
+  let shown = null;     // the tab whose text is in the box (none before the first showTab)
+  const showTab = key => {
+    if (shown && input.value !== settings()[shown]) drafts[shown] = input.value;
+    else if (shown) delete drafts[shown];
+    shown = msgKey = key;
+    el.querySelectorAll('.msg-tab').forEach(t => {
+      t.setAttribute('aria-selected', t.dataset.msg === key);
+      t.tabIndex = t.dataset.msg === key ? 0 : -1;
+      t.classList.toggle('off', t.dataset.msg !== 'messageTemplate' && !settings().reminders);
+    });
+    el.querySelector('#msg-when').textContent = msg().when(Number(settings().reminderDays) || 14) +
+      (key !== 'messageTemplate' && !settings().reminders ? ' (Reminders are turned off.)' : '') +
+      ' Click a field to insert it where your cursor is.';
+    input.value = drafts[key] ?? settings()[key];
+    setStatus(status, '');
+    refresh();
+  };
+  el.querySelectorAll('.msg-tab').forEach(t => {
+    t.addEventListener('click', () => showTab(t.dataset.msg));
+    t.addEventListener('keydown', e => {           // arrow keys move between tabs
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      const i = MESSAGES.findIndex(m => m.key === msgKey);
+      const next = MESSAGES[(i + (e.key === 'ArrowRight' ? 1 : MESSAGES.length - 1)) % MESSAGES.length].key;
+      showTab(next);
+      el.querySelector(`.msg-tab[data-msg="${next}"]`).focus();
+    });
+  });
+  el.refreshMessageTab = () => showTab(msgKey);
 
   const refresh = () => {
     const text = buildReadyMessage(input.value, SAMPLE.name, SAMPLE.order, SAMPLE.pieces);
     preview.innerHTML = `${escHtml(text)}<span class="wa-time">10:42</span>`;
-    save.disabled = input.value.trim() === '' || input.value === settings().messageTemplate;
+    save.disabled = input.value.trim() === '' || input.value === settings()[msgKey];
     hint.style.display = input.value.includes('{order}') ? 'none' : 'block';
     if (!save.disabled) setStatus(status, '');
   };
@@ -289,7 +396,7 @@ function wireMessage(el) {
   }));
 
   el.querySelector('#msg-reset').addEventListener('click', () => {
-    input.value = DEFAULT_MESSAGE;
+    input.value = DEFAULTS[msgKey];
     refresh();
     input.focus();
   });
@@ -297,21 +404,54 @@ function wireMessage(el) {
   save.addEventListener('click', async () => {
     save.disabled = true;
     save.textContent = 'Saving…';
-    const { error } = await saveSettings({ messageTemplate: input.value.trim() });
+    const key = msgKey;
+    const { error } = await saveSettings({ [key]: input.value.trim() });
     save.textContent = 'Save message';
     if (error) {
       save.disabled = false;
       setStatus(status, `Couldn’t save — ${error.message}`, 'err');
-      logEvent('error', `Couldn't save the WhatsApp message: ${error.message}`);
+      logEvent('error', `Couldn't save the ${msg().saved}: ${error.message}`);
       return;
     }
-    input.value = settings().messageTemplate;
+    delete drafts[key];
+    input.value = settings()[key];
     refresh();
     setStatus(status, '✓ Saved', 'ok');
-    logEvent('info', 'Settings: WhatsApp message changed', { kind: 'settings', message: settings().messageTemplate });
+    logEvent('info', `Settings: ${msg().saved} changed`, { kind: 'settings', key, message: settings()[key] });
   });
 
-  refresh();
+  showTab(msgKey);
+}
+
+// ─── Reminder timing ──────────────────────────────────────────────────────────
+
+function wireDays(el) {
+  const input  = el.querySelector('#days-input');
+  const save   = el.querySelector('#days-save');
+  const status = el.querySelector('#days-status');
+  input.value = settings().reminderDays;
+  const valid = () => /^\d+$/.test(input.value) && Number(input.value) >= 1 && Number(input.value) <= 90;
+  input.addEventListener('input', () => {
+    save.disabled = !valid() || Number(input.value) === Number(settings().reminderDays);
+    setStatus(status, input.value && !valid() ? 'Use a whole number from 1 to 90' : '', input.value && !valid() ? 'err' : '');
+  });
+  el.querySelector('#days-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!valid()) return;
+    const days = Number(input.value);
+    save.disabled = true;
+    const { error } = await saveSettings({ reminderDays: days });
+    if (error) {
+      save.disabled = false;
+      setStatus(status, `Couldn’t save — ${error.message}`, 'err');
+      logEvent('error', `Couldn't save reminder days: ${error.message}`);
+      return;
+    }
+    setStatus(status, `✓ Reminders every ${days} days`, 'ok');
+    logEvent('info', `Settings: reminders after ${days} days`, { kind: 'settings', key: 'reminderDays', value: days });
+    el.refreshMessageTab?.();
+    refreshRemindBadge();
+  });
 }
 
 // ─── Feature switches ─────────────────────────────────────────────────────────
@@ -348,10 +488,80 @@ function renderToggles(el) {
       logEvent('error', `Couldn't save setting ${key}: ${error.message}`);
     } else {
       setStatus(status, value ? '✓ Turned on' : '✓ Turned off', 'ok');
+      if (key === 'reminders') { el.refreshMessageTab?.(); refreshRemindBadge(); }
       const title = TOGGLES.find(t => t.key === key).title;
       logEvent('info', `Settings: “${title}” turned ${value ? 'on' : 'off'}`, { kind: 'settings', key, value });
     }
   }));
+}
+
+// ─── People with access ───────────────────────────────────────────────────────
+// public.staff, through list_staff / add_staff / remove_staff (migrations/20261016_staff_admin.sql).
+
+function wireTeam(el, signal) {
+  const list   = el.querySelector('#team-list');
+  const input  = el.querySelector('#team-email');
+  const add    = el.querySelector('#team-add-btn');
+  const status = el.querySelector('#team-status');
+  let people = [];
+  const day = iso => iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : null;
+
+  const load = async () => {
+    const { data, error } = await supabase.rpc('list_staff');
+    if (signal.aborted) return;
+    if (error) {
+      list.innerHTML = `<span class="tg-desc" style="color:#b94040;">Couldn’t load the list — ${escHtml(error.message)}</span>`;
+      return;
+    }
+    people = Array.isArray(data) ? data : [];
+    list.innerHTML = people.map(p => `
+      <div class="team-row">
+        <div class="who">
+          <div class="em">${escHtml(p.email ?? '(account deleted)')}${p.is_me ? '<small>You</small>' : ''}</div>
+          <div class="when">${p.last_sign_in_at ? `Last signed in ${escHtml(day(p.last_sign_in_at))}` : 'Hasn’t signed in yet'} · access since ${escHtml(day(p.added_at))}</div>
+        </div>
+        ${p.is_me || people.length <= 1 ? '' : `<button type="button" class="btn-text" data-remove="${escHtml(p.user_id)}">Remove access</button>`}
+      </div>`).join('');
+    list.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', () => remove(people.find(p => p.user_id === b.dataset.remove))));
+  };
+
+  const remove = async p => {
+    if (!p) return;
+    const done = await confirmDanger({
+      title: `Remove access for ${p.email}?`,
+      body: `<b>${escHtml(p.email)}</b> won’t be able to see or change anything any more. Their Supabase account stays, so you can give access back later.`,
+      confirmLabel: 'Remove access',
+      run: async () => {
+        const { error } = await supabase.rpc('remove_staff', { p_user_id: p.user_id });
+        if (error) return error.message;
+        logEvent('info', `Access removed for ${p.email}`, { kind: 'settings', key: 'staff', removed: p.email });
+        return null;
+      },
+    });
+    if (done) { setStatus(status, `✓ ${p.email} no longer has access`, 'ok'); load(); }
+  };
+
+  input.addEventListener('input', () => { add.disabled = !/^\S+@\S+\.\S+$/.test(input.value.trim()); setStatus(status, ''); });
+  el.querySelector('#team-add').addEventListener('submit', async e => {
+    e.preventDefault();
+    const email = input.value.trim();
+    if (!email || add.disabled) return;
+    add.disabled = true;
+    add.textContent = 'Adding…';
+    const { data, error } = await supabase.rpc('add_staff', { p_email: email });
+    add.textContent = 'Give access';
+    if (signal.aborted) return;
+    if (error) {
+      add.disabled = false;
+      setStatus(status, error.message, 'err');
+      return;
+    }
+    input.value = '';
+    setStatus(status, `✓ ${data} can now sign in`, 'ok');
+    logEvent('info', `Access given to ${data}`, { kind: 'settings', key: 'staff', added: data });
+    load();
+  });
+  load();
 }
 
 function setStatus(node, text, tone = '') {

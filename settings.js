@@ -2,13 +2,17 @@
 // supabase/migrations/20261014_settings.sql. Until that table exists, the defaults apply.
 
 import { supabase } from './supabase.js';
-import { DEFAULT_MESSAGE } from './whatsapp.js';
+import { DEFAULT_MESSAGE, DEFAULT_REMINDER1, DEFAULT_REMINDER2 } from './whatsapp.js';
 
 export const DEFAULTS = {
   confirmSent:     true,  // ask "Sent? ✓ ✕" after opening WhatsApp, instead of counting it as told right away
   askWhyNotSent:   true,  // ✕ asks for a reason
   undoBar:         true,  // show the bar with Undo after a status change
   messageTemplate: DEFAULT_MESSAGE,
+  reminders:       true,  // offer pickup reminders to customers who were told but haven't come
+  reminderDays:    14,    // days after the "ready" message for reminder 1, and after reminder 1 for reminder 2
+  reminder1Template: DEFAULT_REMINDER1,
+  reminder2Template: DEFAULT_REMINDER2,
   // where ready pieces are kept — chosen when a piece is marked ready
   containers:      ['A', 'B', 'C', 'Cbis', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'מחסן שחור', 'מחסן שקוף', 'מדף', 'שקית בקופה'],
 };

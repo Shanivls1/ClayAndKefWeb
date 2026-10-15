@@ -2,6 +2,7 @@ import { supabase } from '../supabase.js';
 import { escHtml, countBy, fetchAllRows, debounce } from '../utils.js';
 import { LIST_CSS, searchBox, chipGroup, selectBox, clearButton, wireFilters, activeCount, updateClear, renderPager } from '../listui.js';
 import { logEvent } from '../log.js';
+import { confirmDanger, deleteStyles, ICON_TRASH } from '../confirm.js';
 
 // ─── State ───────────────────────────────────────────────────────────────────
 let allTypes = [];
@@ -116,7 +117,7 @@ export function render() {
       <rect width="100%" height="100%" filter="url(#ck-noise-stock)"/>
     </svg>
     <div style="position:fixed;top:0;right:0;width:600px;height:400px;
-      background:radial-gradient(ellipse at top right,rgba(156,26,77,0.08),transparent);
+      background:radial-gradient(ellipse farthest-side at top right,rgba(156,26,77,0.08),transparent);
       pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px;position:relative;z-index:1;">
@@ -275,6 +276,7 @@ export async function mount(el, signal) {
   savingIds = new Set();
   editing = null;
   stockNotes = new Map();
+  deleteStyles();
   filters     = { ...DEFAULTS };
   currentPage = 1;
   wireModal(el, signal);
@@ -388,6 +390,8 @@ function buildCard(t) {
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;">
           <div style="font-family:'Inter',sans-serif;font-size:18px;font-weight:700;color:#1a120b;">${escHtml(t.name)}</div>
           ${t.code && t.code !== t.name ? `<span style="font-family:'Inter',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.08em;color:#9C1A4D;background:rgba(156,26,77,0.08);padding:2px 7px;border-radius:4px;">${escHtml(t.code)}</span>` : ''}
+          <button type="button" class="del-btn type-del" data-id="${escHtml(t.id)}" style="margin-left:auto;align-self:center;"
+            title="Delete this object type" aria-label="Delete ${escHtml(t.code || t.name)}">${ICON_TRASH}</button>
         </div>
         ${pill}
       </div>
@@ -459,6 +463,8 @@ function wireStockButtons(el) {
     btn.addEventListener('click', () => open(btn.dataset.id, btn.classList.contains('stock-plus') ? 'add' : 'remove')));
   el.querySelectorAll('.stock-count').forEach(btn =>
     btn.addEventListener('click', () => open(btn.dataset.id, 'set')));
+  el.querySelectorAll('.type-del').forEach(btn =>
+    btn.addEventListener('click', () => deleteType(el, btn.dataset.id)));
 
   const form = el.querySelector('.adj-form');
   if (!form) return;
@@ -553,6 +559,47 @@ async function changeStock(el, type, { delta, set }) {
       if (!editing) renderCards(el);
     }, 2500);
   }
+  renderCards(el);
+}
+
+// ─── Delete ───────────────────────────────────────────────────────────────────
+
+// Only types no piece uses can go — deleting one in use would take pieces out of past orders.
+async function deleteType(el, id) {
+  const t = allTypes.find(x => x.id === id);
+  if (!t) return;
+  const label = t.code && t.code !== t.name ? `${t.code} (${t.name})` : t.name;
+  const { count, error } = await supabase.from('objects').select('id', { count: 'exact', head: true }).eq('object_type_id', id);
+  if (error) {
+    stockErrors.set(id, `Couldn't check whether it's in use — ${error.message}`);
+    renderCards(el);
+    return;
+  }
+  if (count > 0) {
+    await confirmDanger({
+      title: `${label} can't be deleted`,
+      body: `It's used by <b>${count}</b> piece${count === 1 ? '' : 's'} in orders. Deleting it would remove them from those orders, so it stays.`,
+    });
+    return;
+  }
+  const deleted = await confirmDanger({
+    title: `Delete ${label}?`,
+    body: `No piece uses it${t.raw_stock ? `, and its <b>${t.raw_stock}</b> in stock are dropped with it` : ''}. This can't be undone.`,
+    confirmLabel: 'Delete type',
+    run: async () => {
+      const { error } = await supabase.rpc('delete_object_type', { p_type_id: id });
+      if (error) {
+        logEvent('error', `Couldn't delete object type ${label}: ${error.message}`);
+        return `Couldn't delete — ${error.message}`;
+      }
+      logEvent('info', `Deleted object type ${label}`);
+      return null;
+    },
+  });
+  if (!deleted) return;
+  allTypes = allTypes.filter(x => x.id !== id);
+  if (editing?.id === id) editing = null;
+  renderFilters(el);
   renderCards(el);
 }
 

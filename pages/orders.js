@@ -2,9 +2,12 @@ import { supabase } from '../supabase.js';
 import { initCombobox } from '../combobox.js';
 import { escHtml, fmtNum, fmtDate, todayLocal, countBy, debounce, fetchAllRows, pgQuote } from '../utils.js';
 import { LIST_CSS, searchBox, chipGroup, selectBox, dateRange, clearButton, wireFilters as wireFilterControls,
-         activeCount, updateClear, renderPager } from '../listui.js';
+         activeCount, updateClear, renderPager, filterToggle, updateToggle } from '../listui.js';
 import { buildReadyMessage, openWhatsApp } from '../whatsapp.js';
 import { logEvent } from '../log.js';
+import { confirmDanger, deleteStyles, ICON_TRASH } from '../confirm.js';
+import { setRemindBadge } from '../navbadge.js';
+import { createOrder } from '../neworder.js';
 import { loadSettings, settings, DEFAULTS as SETTING_DEFAULTS } from '../settings.js';
 
 // ─── Status config ─────────────────────────────────────────────────────────────
@@ -14,7 +17,7 @@ const STATUSES = ['received', 'ready', 'picked_up'];
 const STATUS_LABEL = {
   received:  'Waiting',
   ready:     'Ready',
-  picked_up: 'Picked up',
+  picked_up: 'Collected',
 };
 
 const STATUS_NEXT = {
@@ -40,11 +43,13 @@ let totalCount     = 0;
 let pageSize       = 10;
 const FILTER_DEFAULTS = { q: '', stage: 'all', wa: 'all', type: '', container: '', from: '', to: '', sort: 'newest' };
 let filters        = { ...FILTER_DEFAULTS };
+let filtersOpen    = false; // filter rows are hidden behind the "Filters" button until opened
 let expandedIds    = new Set();
 let savingIds      = new Set(); // pieces whose status change is being saved
 let toastTimer     = null;
 
-// WhatsApp chats opened but not yet confirmed as sent: orderId → { openedAt, orderNumber, name, phone, itemIds }.
+// WhatsApp chats opened but not yet confirmed as sent: orderId → { kind, openedAt, orderNumber, name, phone, itemIds }.
+// kind: 'ready' (the first message) or 'reminder1' / 'reminder2' (pickup reminders).
 // Each opening is also logged (activity_log, details.kind = 'wa_opened'), so unanswered chats come back after
 // a reload or days later — see loadPendingWa().
 const pendingWa  = new Map();
@@ -52,6 +57,8 @@ let waIssues     = new Map(); // orderId → { reason, at } — latest "not sent
 let trayOpen     = false;
 const DEFAULT_REASONS = ["Number isn't on WhatsApp", 'Wrong number', "WhatsApp didn't open", 'Will send later'];
 let waReasons    = [...DEFAULT_REASONS];
+let remindDue    = 0;           // orders with a pickup reminder due (all pages)
+let remindSeq    = 0;           // ignores superseded counts
 let loadSeq        = 0;         // ignores responses from superseded searches
 let pageSignal     = null;
 
@@ -75,6 +82,7 @@ export function render() {
 
       /* Pieces inside an opened order */
       .pc-well { background:#f6f1eb;padding:12px 20px 14px 68px;border-bottom:1px solid #ede6dd;display:flex;flex-direction:column;gap:8px; }
+      .pc-foot { display:flex;justify-content:flex-end;margin-top:2px; }
       .pc-card {
         display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.5fr) 168px;align-items:center;gap:16px;
         background:#fff;border:1px solid #ece4da;border-radius:12px;padding:12px 16px;
@@ -88,13 +96,9 @@ export function render() {
         padding:10px 14px;border-radius:12px;font-family:'Inter',sans-serif;font-size:13px;line-height:1.5;
       }
       .ord-strip svg { flex-shrink:0; }
-      .ord-strip.waiting { background:#fff;border:1px dashed #d8cdc0;color:#6b5a4a; }
       .ord-strip.ready   { background:#e9f6ee;border:1px solid #bfe3cb;color:#1f6b38; }
       .ord-strip.sent    { background:transparent;color:#1e9e50;padding:2px 2px 0; }
       .ord-strip-text { flex:1;min-width:200px; }
-      .ord-strip-meter { display:inline-flex;gap:3px;vertical-align:middle;margin-left:6px; }
-      .ord-strip-meter i { width:14px;height:5px;border-radius:3px;background:#e6ddd2; }
-      .ord-strip-meter i.on { background:#2f8a4a; }
       .wa-btn {
         display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:999px;border:none;cursor:pointer;
         background:#25D366;color:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;
@@ -105,7 +109,51 @@ export function render() {
       .wa-btn:active { transform:scale(.96); }
       .wa-btn:focus-visible { outline:2px solid #1f6b38;outline-offset:3px; }
       .wa-btn.small { padding:4px 11px;font-size:11px;margin-top:6px;box-shadow:0 1px 4px rgba(37,211,102,.35); }
-      .wa-told { margin-top:6px;display:inline-flex;align-items:center;gap:4px;font-family:'Inter',sans-serif;font-size:11px;font-weight:500;color:#1e9e50; }
+      .wa-btn.warn { background:#f4c430;color:#4a3300;box-shadow:0 1px 4px rgba(196,148,20,.35); }
+      .wa-btn.warn:hover { background:#e9b81f; }
+      .wa-btn.warn svg { width:13px;height:13px;stroke-width:2.6; }
+      /* Pickup reminders are blue (same blue as the "check chat" button) */
+      .wa-btn.remind { background:#2D7CAD;color:#fff;box-shadow:0 1px 2px rgba(45,124,173,.3),0 4px 12px rgba(45,124,173,.22); }
+      .wa-btn.remind:hover { background:#256a95; }
+      .wa-btn.remind:focus-visible { outline-color:#2D7CAD; }
+      .wa-btn.remind.small { box-shadow:0 1px 4px rgba(45,124,173,.35); }
+      .wa-btn.remind.warn { background:#f4c430;color:#4a3300;box-shadow:0 1px 4px rgba(196,148,20,.35); }
+      .ord-strip.remind { background:#eef5fa;border:1px solid #c7dceb;color:#1f4f6e; }
+      .remind-banner {
+        display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:11px 16px;border-radius:12px;
+        background:#eef5fa;border:1px solid #c7dceb;color:#1f4f6e;font-family:'Inter',sans-serif;font-size:13px;line-height:1.5;
+        box-shadow:0 1px 2px rgba(31,79,110,.06);
+      }
+      .remind-banner[hidden] { display:none; }
+      .remind-banner svg { flex-shrink:0; }
+      .remind-banner span { flex:1;min-width:220px; }
+      .remind-banner button {
+        background:#fff;border:1px solid #a9cbe2;color:#2D7CAD;border-radius:999px;padding:5px 14px;cursor:pointer;
+        font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;transition:transform .18s cubic-bezier(.34,1.56,.64,1);
+      }
+      .remind-banner button:hover { background:#2D7CAD;border-color:#2D7CAD;color:#fff; }
+      .remind-banner button:active { transform:scale(.96); }
+      .remind-banner button:focus-visible { outline:2px solid #2D7CAD;outline-offset:2px; }
+      /* Instant tooltip: any element with class "tip" and data-tip="…" */
+      .tip { position:relative; }
+      .tip::after, .tip::before {
+        position:absolute;left:50%;pointer-events:none;opacity:0;z-index:60;
+        transition:opacity .12s ease,transform .18s cubic-bezier(.34,1.56,.64,1);
+      }
+      .tip::after {
+        content:attr(data-tip);bottom:calc(100% + 9px);transform:translate(-50%,4px);
+        width:max-content;max-width:260px;white-space:normal;text-align:start;
+        padding:6px 10px;border-radius:8px;background:#2b1a14;color:#fff;
+        font-family:'Inter',sans-serif;font-size:12px;font-weight:500;line-height:1.4;letter-spacing:0;
+        box-shadow:0 6px 18px rgba(43,26,20,.25);
+      }
+      .tip::before {
+        content:'';bottom:calc(100% + 3px);transform:translate(-50%,4px);
+        border:6px solid transparent;border-top-color:#2b1a14;border-bottom:0;
+      }
+      .tip:hover::after, .tip:hover::before,
+      .tip:focus-visible::after, .tip:focus-visible::before { opacity:1;transform:translate(-50%,0); }
+      @media (prefers-reduced-motion: reduce) { .tip::after, .tip::before { transition:none; } }
       .pc-name { display:flex;align-items:center;gap:8px;min-width:0; }
       .pc-name span:last-child { font-family:'Inter',sans-serif;font-size:14px;font-weight:600;color:#1a120b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
       .pc-code { flex-shrink:0;font-family:'Inter',sans-serif;font-size:10px;font-weight:700;letter-spacing:0.06em;color:#9C1A4D;background:rgba(156,26,77,0.08);padding:2px 6px;border-radius:4px; }
@@ -113,7 +161,7 @@ export function render() {
       .pc-link:hover { color:#7D1540; }
       .pc-link:focus-visible { outline:2px solid #9C1A4D;outline-offset:2px; }
 
-      /* Progress track: Waiting → Ready → Picked up */
+      /* Progress track: Waiting → Ready → Collected */
       .st { display:flex;align-items:center;gap:6px;font-family:'Inter',sans-serif;font-size:12px;--tone:#9C1A4D; }
       .st.tone-ready { --tone:#2f8a4a; }
       .st.tone-done  { --tone:#a89582; }
@@ -199,7 +247,6 @@ export function render() {
       .ask-btn:not(.yes):hover { background:#f7f2ec; }
       .ask-btn:active { transform:scale(.96); }
       .ask-btn:focus-visible { outline:2px solid #9C1A4D;outline-offset:2px; }
-      .wa-issue { margin-top:5px;font-family:'Inter',sans-serif;font-size:11px;font-weight:500;color:#b0485f; }
       .wa-issue-line { display:block;margin-top:2px;font-size:12px;color:#a2384f;font-weight:500; }
 
       /* Tray of chats waiting for a "sent?" answer */
@@ -252,16 +299,41 @@ export function render() {
       .why-cancel:hover { color:#1a120b; }
 
       /* Containers (where a ready piece is kept) */
-      .pc-box, .ord-box {
-        display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:7px;cursor:pointer;
-        font-family:'Inter',sans-serif;font-size:12px;font-weight:600;color:#6b4e12;
-        background:#fbf3e2;border:1px solid #ecd9ad;transition:transform .18s cubic-bezier(.34,1.56,.64,1);
+      /* Container = a place, so it looks like a location label rather than another piece */
+      .ord-box {
+        display:inline-flex;align-items:center;gap:4px;cursor:pointer;
+        font-family:'Inter',sans-serif;font-size:12px;font-weight:600;color:#8a6420;
+        background:#fff;border:1px solid #e2cf9e;transition:transform .18s cubic-bezier(.34,1.56,.64,1);
       }
-      .pc-box:hover, .ord-box:hover { background:#f6e7c6; }
+      .ord-box:hover { background:#fbf3e2; }
+      .pc-box {
+        display:inline-flex;align-items:center;gap:4px;margin-top:4px;padding:1px 4px 1px 0;border:none;background:none;cursor:pointer;
+        font-family:'Inter',sans-serif;font-size:12px;font-weight:500;color:#8a6420;border-radius:5px;
+        transition:transform .18s cubic-bezier(.34,1.56,.64,1);
+      }
+      .pc-box b { font-weight:700; }
+      .pc-box:hover { text-decoration:underline;text-underline-offset:2px; }
       .pc-box:active, .ord-box:active { transform:scale(.95); }
       .pc-box:focus-visible, .ord-box:focus-visible { outline:2px solid #9C1A4D;outline-offset:2px; }
-      .pc-box.none, .ord-box.none { background:#fff;border-style:dashed;color:#b45309;font-weight:500; }
-      .ord-box { margin-top:6px;font-size:11px;padding:2px 8px; }
+      .ord-box.none { border-style:dashed;color:#b45309;font-weight:500; }
+      .pc-box.none { color:#b45309; }
+      .pins { display:flex;flex-wrap:wrap;align-items:center;gap:4px; }
+      .pin, .pins .ord-box {
+        display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:999px;
+        font-family:'Inter',sans-serif;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;
+      }
+      .pin-wait  { background:rgba(156,26,77,0.10);color:#9C1A4D; }
+      .pin-ready { background:rgba(47,138,74,0.12);color:#2f8a4a; }
+      .pin-done  { background:#ede8e2;color:#8a7560; }
+      .pin-told  { background:#e6f7ec;color:#1e9e50;font-weight:500; }
+      /* "Notified" pin is a button: opens the customer's chat */
+      button.pin { border:none;cursor:pointer;margin:0;transition:transform .18s cubic-bezier(.34,1.56,.64,1); }
+      button.pin-told:hover { background:#d3f0de;color:#167a3d; }
+      button.pin:active { transform:scale(.94); }
+      button.pin:focus-visible { outline:2px solid #1e9e50;outline-offset:2px; }
+      .pin-remind { background:#e6f0f7;color:#2D7CAD;font-weight:600; }
+      .pin svg, .pins .ord-box svg { flex-shrink:0; }
+      .pins .ord-box { margin:0;border-radius:6px; }
       .cont-pop {
         position:fixed;z-index:260;width:300px;padding:14px;border-radius:14px;background:#fff;border:1px solid #ece4da;
         box-shadow:0 16px 40px rgba(45,31,20,.22),0 3px 10px rgba(45,31,20,.10);font-family:'Inter',sans-serif;
@@ -302,7 +374,7 @@ export function render() {
       </filter>
       <rect width="100%" height="100%" filter="url(#ck-noise-orders)"/>
     </svg>
-    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
+    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse farthest-side at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px 40px 140px;position:relative;z-index:1;">
 
@@ -325,6 +397,7 @@ export function render() {
       </div>
 
       <div id="ord-filters" class="fbar"></div>
+      <div id="remind-banner" class="remind-banner" role="status" hidden></div>
 
       <div style="background:#fff;border-radius:14px;border:1px solid #e8e1d8;overflow:hidden;box-shadow:0 2px 6px rgba(45,31,20,0.08),0 8px 24px rgba(45,31,20,0.05);">
         <div style="display:grid;grid-template-columns:28px 60px minmax(0,2fr) minmax(0,2fr) 190px 110px 176px;padding:10px 20px;background:#f5f0eb;border-bottom:1px solid #e8e1d8;">
@@ -534,8 +607,15 @@ export async function mount(el, signal) {
   pageSignal  = signal;
   currentPage = 1;
   filters     = { ...FILTER_DEFAULTS };
+  filtersOpen = false;
+  // links from Home: #/orders?stage=waiting, ?wa=to_tell, ?wa=remind, ?q=12 preset the filters
+  const preset = new URLSearchParams(location.hash.split('?')[1] ?? '');
+  for (const [k, v] of preset) if (k in FILTER_DEFAULTS && k !== 'sort') filters[k] = v;
+  if (['stage', 'wa', 'type', 'container', 'from', 'to'].some(k => preset.has(k))) filtersOpen = true;
+  if (preset.size) history.replaceState(null, '', '#/orders'); // a reload shows the plain list
   expandedIds = new Set();
   savingIds   = new Set();
+  deleteStyles();
   await Promise.all([loadObjectTypes(), loadCustomers(), loadSettings({ fresh: true })]);
   if (!settings().confirmSent) pendingWa.clear();
   if (signal.aborted) return;
@@ -593,10 +673,10 @@ async function loadOrders(el) {
     else if (/^[\d\s-]+$/.test(q)) query = query.ilike('customer_phone', `%${q.replace(/\D/g, '')}%`);
     else                            query = query.or(`customer_name.ilike.${like},customer_phone.ilike.${like}`);
   }
-  if (filters.stage === 'open')            query = query.in('stage', ['waiting', 'ready']);
-  else if (filters.stage !== 'all')        query = query.eq('stage', filters.stage);
+  if (filters.stage !== 'all')             query = query.eq('stage', filters.stage);
   if (filters.wa === 'to_tell')            query = query.eq('stage', 'ready').gt('ready_untold', 0);
   if (filters.wa === 'told')               query = query.eq('stage', 'ready').eq('ready_untold', 0);
+  if (filters.wa === 'remind')             query = query.gt('reminder_due', 0);
   if (filters.type)                        query = query.ilike('codes', `% ${filters.type} %`);
   if (filters.container)                   query = query.ilike('containers', `% ${filters.container} %`);
   if (filters.from)                        query = query.gte('received_at', filters.from);
@@ -616,7 +696,7 @@ async function loadOrders(el) {
   if (!error && page?.length) {
     const res = await supabase
       .from('orders')
-      .select(`id, order_number, received_at, notes,
+      .select(`id, order_number, received_at, notes, reminder1_at, reminder2_at,
                customers(id, name, phone),
                objects(id, status, notified_at, picked_up_at, container, object_types(id, name, code))`)
       .in('id', page.map(r => r.id));
@@ -637,6 +717,7 @@ async function loadOrders(el) {
 
   allOrders  = data ?? [];
   loadWaIssues(el); // fills in "not sent" reasons, then re-renders
+  loadRemindCount(el);
   totalCount = count ?? 0;
   renderOrders(el, allOrders);
   renderPagination(el);
@@ -661,6 +742,8 @@ function renderOrders(el, orders) {
   wireExpandToggles(el);
   wireStatusButtons(el);
   wireWhatsAppButtons(el);
+  el.querySelectorAll('.ord-del').forEach(btn =>
+    btn.addEventListener('click', () => deleteOrder(el, allOrders.find(o => o.id === btn.dataset.orderId))));
 }
 
 function buildOrderBlock(order, isLast) {
@@ -681,27 +764,36 @@ function buildOrderBlock(order, isLast) {
     ? 'No objects'
     : `${items.length} object${items.length !== 1 ? 's' : ''}${codes ? ': ' + codes : ''}`;
 
+  const pin = (cls, icon, value, tip, meaning) =>
+    `<span class="pin tip ${cls}" data-tip="${escHtml(tip)}" role="img" aria-label="${escHtml(meaning)}">${icon}<span aria-hidden="true">${escHtml(value)}</span></span>`;
   let statusBadges = '';
-  if (counts.received) statusBadges += `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;background:rgba(156,26,77,0.10);color:#9C1A4D;margin-right:4px;">${counts.received} waiting</span>`;
-  if (counts.ready)    statusBadges += `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;background:rgba(47,138,74,0.12);color:#2f8a4a;margin-right:4px;">${counts.ready} ready</span>`;
-  if (counts.picked_up) statusBadges += `<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500;background:#ede8e2;color:#8a7560;margin-right:4px;">${counts.picked_up} picked up</span>`;
+  if (counts.received)  statusBadges += pin('pin-wait',  PIN_WAIT,  counts.received,  'Waiting',   `${counts.received} waiting`);
+  if (counts.ready)     statusBadges += pin('pin-ready', PIN_READY, counts.ready,     'Ready',     `${counts.ready} ready`);
+  if (counts.picked_up) statusBadges += pin('pin-done',  PIN_DONE,  counts.picked_up, 'Collected', `${counts.picked_up} collected`);
 
   const allPickedUp = items.length > 0 && items.every(i => i.status === 'picked_up');
   const wa          = whatsAppState(order);
   const oid = escHtml(order.id);
   let sendButton = '';
   if (wa.state === 'to_send') {
-    sendButton = `<button type="button" class="wa-btn small wa-send-order" data-order-id="${oid}">${ICON_WA} Send WhatsApp</button>` +
-      (wa.issue ? `<div class="wa-issue">Not sent: ${escHtml(wa.issue.reason)}</div>` : '');
+    sendButton = waSendButton(oid, wa.issue, true);
+  } else if (wa.state === 'remind') {
+    sendButton = waSendButton(oid, wa.issue, true, wa.step);
   } else if (wa.state === 'pending') {
-    sendButton = `<span class="wa-ask">Sent?
+    sendButton = `<span class="wa-ask">${wa.kind && wa.kind !== 'ready' ? `${capital(KIND_LABEL[wa.kind])} sent?` : 'Sent?'}
       <button type="button" class="ask-chip check wa-check" data-order-id="${oid}" aria-label="Open the chat to check" title="Open the chat to check">?</button>
       <button type="button" class="ask-chip yes wa-yes" data-order-id="${oid}" aria-label="Yes, the message was sent" title="Yes, sent">✓</button>
       <button type="button" class="ask-chip no wa-no" data-order-id="${oid}" aria-label="No, it wasn't sent" title="Not sent">✕</button></span>
       <div class="wa-ask-when" style="font-family:'Inter',sans-serif;font-size:11px;margin-top:3px;">opened ${escHtml(fmtWhen(pendingWa.get(order.id)?.openedAt))}</div>`;
-  } else if (wa.state === 'sent') {
-    sendButton = `<span class="wa-told">${ICON_CHECK_SM} Told ${escHtml(fmtShortDate(wa.sentAt))}</span>`;
   }
+  const told = wa.state === 'sent' || wa.state === 'remind';
+  // click → opens the customer's WhatsApp chat (nothing typed) to see the conversation
+  const toldPin = told
+    ? `<button type="button" class="pin tip pin-told wa-open-chat" data-order-id="${oid}" data-tip="Notified on WhatsApp — open chat"
+        aria-label="Customer notified on WhatsApp, ${escHtml(fmtShortDate(wa.sentAt))}. Open the chat">${PIN_TOLD}<span aria-hidden="true">${escHtml(fmtShortDate(wa.sentAt))}</span></button>`
+    : '';
+  const remindTip = wa.r2 ? `Reminders sent ${fmtShortDate(wa.r1)} and ${fmtShortDate(wa.r2)}` : `Reminder sent ${fmtShortDate(wa.r1)}`;
+  const remindPin = told && wa.r1 ? pin('pin-remind', PIN_BELL, wa.r2 ? 2 : 1, remindTip, remindTip) : '';
 
   const expandedSection = isExpanded ? buildItemsSection(order) : '';
 
@@ -727,8 +819,7 @@ function buildOrderBlock(order, isLast) {
         </div>
         <div style="font-family:'Inter',sans-serif;font-size:13px;color:#5a4a3a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:2px;">${escHtml(itemsSummary)}</div>
         <div style="padding-top:2px;">
-          <div style="display:flex;flex-wrap:wrap;gap:2px;">${statusBadges || '<span style="font-size:12px;color:#b0a090;font-style:italic;font-family:Inter,sans-serif;">—</span>'}</div>
-          ${buildOrderBox(order)}
+          <div class="pins">${statusBadges || '<span style="font-size:12px;color:#b0a090;font-family:Inter,sans-serif;">—</span>'}${buildOrderBox(order)}${toldPin}${remindPin}</div>
           ${sendButton}
         </div>
         <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;padding-top:2px;">${escHtml(dateIn)}</div>
@@ -740,8 +831,14 @@ function buildOrderBlock(order, isLast) {
 
 const ICON_CHECK = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 const ICON_BAG   = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12l1 13H5L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg>`;
-const ICON_BOX = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></svg>`;
-const ICON_CHECK_SM = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+const ICON_BOX = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>`; // location pin
+const PIN_ICON  = (paths) => `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const PIN_WAIT  = PIN_ICON('<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/>');                // clock
+const PIN_READY = PIN_ICON('<polyline points="20 6 9 17 4 12"/>');
+const PIN_DONE  = PIN_ICON('<path d="M6 7h12l1 13H5L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/>');                     // bag
+const PIN_ISSUE = PIN_ICON('<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>'); // warning
+const PIN_BELL  = PIN_ICON('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'); // bell
+const PIN_TOLD  = PIN_ICON('<path d="M3 21l1.65-3.8a9 9 0 1 1 3.4 2.9L3 21"/><path d="m9 11 2 2 4-4"/>');     // chat + tick
 const ICON_WA    = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21l1.65-3.8a9 9 0 1 1 3.4 2.9L3 21"/></svg>`;
 
 // Where the order stands for the WhatsApp message, which goes out once every piece is ready.
@@ -749,6 +846,24 @@ const ICON_WA    = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" 
 //   pending – chat opened, owner hasn't said if it went out
 //   sent    – customer told (sentAt = latest)    done    – everything collected
 // issue: the latest "not sent" reason, if it's newer than the last successful message.
+// Times come back from the database as "…+00:00" and from the browser as "…Z" — compare the moments, never the text
+const ms = iso => new Date(iso).getTime();
+
+//   remind  – told, not collected, and a pickup reminder is due (step 1 or 2)
+// Reminders count from the latest "ready" message: reminder 1 comes reminderDays after it, reminder 2 reminderDays
+// after reminder 1, then nothing more. "Send again" starts over. Same rule as order_list.reminder_due in the database.
+const DAY_MS = 86_400_000;
+
+function reminderInfo(order, sentAt) {
+  const r1 = order.reminder1_at && ms(order.reminder1_at) >= ms(sentAt) ? order.reminder1_at : null;
+  const r2 = r1 && order.reminder2_at && ms(order.reminder2_at) >= ms(r1) ? order.reminder2_at : null;
+  const s = settings();
+  const gap = (Number(s.reminderDays) || 14) * DAY_MS;
+  const nextStep = !s.reminders || r2 ? 0 : r1 ? 2 : 1;
+  const nextAt = nextStep ? ms(nextStep === 1 ? sentAt : r1) + gap : null;
+  return { r1, r2, nextStep, nextAt, due: nextStep > 0 && Date.now() >= nextAt };
+}
+
 function whatsAppState(order) {
   const items   = order.objects ?? [];
   const waiting = items.filter(i => i.status === 'received').length;
@@ -756,40 +871,61 @@ function whatsAppState(order) {
   if (!items.length) return { state: 'empty' };
   if (waiting)       return { state: 'waiting', readyCount: items.length - waiting, total: items.length };
   if (!ready.length) return { state: 'done' };
-  if (settings().confirmSent && pendingWa.has(order.id)) return { state: 'pending', total: items.length };
-  const sentAt = ready.every(i => i.notified_at) ? ready.map(i => i.notified_at).sort().at(-1) : null;
+  if (settings().confirmSent && pendingWa.has(order.id)) return { state: 'pending', total: items.length, kind: pendingWa.get(order.id).kind };
+  const sentAt = ready.every(i => i.notified_at) ? ready.map(i => i.notified_at).sort((a, b) => ms(a) - ms(b)).at(-1) : null;
   const issue  = waIssues.get(order.id);
-  const freshIssue = issue && (!sentAt || issue.at > sentAt) ? issue : null;
-  if (!sentAt) return { state: 'to_send', total: items.length, issue: freshIssue };
-  return { state: 'sent', sentAt, issue: freshIssue };
+  if (!sentAt) return { state: 'to_send', total: items.length, issue };
+  const rem = reminderInfo(order, sentAt);
+  const lastOk = rem.r2 ?? rem.r1 ?? sentAt;                       // a "not sent" older than this was fixed since
+  const freshIssue = issue && ms(issue.at) > ms(lastOk) ? issue : null;
+  if (rem.due) return { state: 'remind', step: rem.nextStep, sentAt, ...rem, issue: freshIssue };
+  return { state: 'sent', sentAt, ...rem, issue: freshIssue };
 }
+
+const KIND_LABEL = { ready: 'message', reminder1: 'reminder 1', reminder2: 'reminder 2' };
+const capital = t => t[0].toUpperCase() + t.slice(1);
+const daysSince = iso => Math.max(0, Math.floor((Date.now() - ms(iso)) / DAY_MS));
 
 function fmtShortDate(iso) {
   return iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+}
+
+// Send WhatsApp — turns yellow with a warning sign when the last message didn't go out (reason on hover).
+// step 1 / 2: the same button for a pickup reminder (blue).
+function waSendButton(orderId, issue, small, step = 0) {
+  const label = step ? `Send reminder${step === 2 ? ' 2' : ''}` : 'Send WhatsApp';
+  const cls   = `wa-btn${small ? ' small' : ''}${step ? ' remind' : ''}`;
+  const kind  = step ? ` data-kind="reminder${step}"` : '';
+  if (!issue) {
+    return `<button type="button" class="${cls} wa-send-order" data-order-id="${orderId}"${kind}>${step ? PIN_BELL : ICON_WA} ${label}</button>`;
+  }
+  // the reason shows in a tooltip right away on hover / keyboard focus
+  return `<button type="button" class="${cls} warn tip wa-send-order" data-order-id="${orderId}"${kind}
+    data-tip="Not sent: ${escHtml(issue.reason)}" aria-label="${label} — last message not sent: ${escHtml(issue.reason)}">${PIN_ISSUE} ${label}</button>`;
 }
 
 function buildOrderStrip(order) {
   const wa = whatsAppState(order);
   const first = escHtml(String(order.customers?.name ?? 'the customer').split(' ')[0]);
   const id = escHtml(order.id);
-  if (wa.state === 'waiting') {
-    const meter = Array.from({ length: wa.total }, (_, n) => `<i class="${n < wa.readyCount ? 'on' : ''}"></i>`).join('');
-    return `<div class="ord-strip waiting">${ICON_WA}
-      <span class="ord-strip-text">Send the WhatsApp once ${wa.total === 1 ? 'the piece is' : `all ${wa.total} pieces are`} ready
-        <span style="color:#a09080;">· ${wa.readyCount} of ${wa.total} ready</span><span class="ord-strip-meter" aria-hidden="true">${meter}</span></span>
-    </div>`;
-  }
   const issueLine = wa.issue
     ? `<span class="wa-issue-line">Not sent ${escHtml(fmtShortDate(wa.issue.at))} — ${escHtml(wa.issue.reason)}</span>` : '';
   if (wa.state === 'to_send') {
     return `<div class="ord-strip ready">${ICON_CHECK}
       <span class="ord-strip-text"><strong>${wa.total === 1 ? 'The piece is' : `All ${wa.total} pieces are`} ready</strong> — let ${first} know.${issueLine}</span>
-      <button type="button" class="wa-btn wa-send-order" data-order-id="${id}">${ICON_WA} ${wa.issue ? 'Try again' : 'Send WhatsApp'}</button>
+      ${waSendButton(id, wa.issue, false)}
+    </div>`;
+  }
+  if (wa.state === 'remind') {
+    const since = wa.step === 1 ? `Told ${daysSince(wa.sentAt)} days ago` : `Reminded ${daysSince(wa.r1)} days ago`;
+    return `<div class="ord-strip remind">${PIN_BELL}
+      <span class="ord-strip-text"><strong>${since} and not collected yet</strong> — send ${first} ${wa.step === 1 ? 'a reminder' : 'a second reminder'}.${issueLine}</span>
+      ${waSendButton(id, wa.issue, false, wa.step)}
     </div>`;
   }
   if (wa.state === 'pending') {
     return `<div class="ord-strip pending">${ICON_WA}
-      <span class="ord-strip-text"><strong>Opened in WhatsApp ${escHtml(fmtWhen(pendingWa.get(order.id)?.openedAt))}</strong> — did the message go out?
+      <span class="ord-strip-text"><strong>${wa.kind && wa.kind !== 'ready' ? `${capital(KIND_LABEL[wa.kind])} opened` : 'Opened'} in WhatsApp ${escHtml(fmtWhen(pendingWa.get(order.id)?.openedAt))}</strong> — did the message go out?
         <span style="display:block;font-size:12px;color:#8a6a2a;">Not sure? Open the chat and look.</span></span>
       <button type="button" class="ask-btn check wa-check" data-order-id="${id}"><b>?</b> Check chat</button>
       <button type="button" class="ask-btn yes wa-yes" data-order-id="${id}">${ICON_CHECK} Yes, sent</button>
@@ -798,7 +934,9 @@ function buildOrderStrip(order) {
   }
   if (wa.state === 'sent') {
     return `<div class="ord-strip sent">${ICON_WA}
-      <span>WhatsApp sent ${escHtml(fmtShortDate(wa.sentAt))} ·</span>
+      <span>WhatsApp sent ${escHtml(fmtShortDate(wa.sentAt))}${wa.r1 ? ` · reminder sent ${escHtml(fmtShortDate(wa.r1))}` : ''}${wa.r2 ? ` · reminder 2 sent ${escHtml(fmtShortDate(wa.r2))}` : ''}${
+        wa.nextAt ? ` · ${wa.nextStep === 1 ? 'reminder' : 'reminder 2'} due ${escHtml(fmtShortDate(new Date(wa.nextAt).toISOString()))}` : ''} ·</span>
+      <button type="button" class="pc-link wa-open-chat" data-order-id="${id}">Open chat</button> ·
       <button type="button" class="pc-link wa-send-order" data-order-id="${id}" data-again="1">Send again</button>
       ${wa.issue ? `<span class="wa-issue-line" style="width:100%;">Later try ${escHtml(fmtShortDate(wa.issue.at))} didn't go out — ${escHtml(wa.issue.reason)}</span>` : ''}
     </div>`;
@@ -808,10 +946,12 @@ function buildOrderStrip(order) {
 
 function buildItemsSection(order) {
   const items   = order.objects ?? [];
+  const del = `<div class="pc-foot"><button type="button" class="del-btn text ord-del" data-order-id="${escHtml(order.id)}">${ICON_TRASH} Delete order</button></div>`;
   if (items.length === 0) {
     return `
       <div class="pc-well" style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;">
         No pieces in this order.
+        ${del}
       </div>`;
   }
 
@@ -819,10 +959,11 @@ function buildItemsSection(order) {
     <div class="pc-well">
       ${buildOrderStrip(order)}
       ${items.map(buildItemRow).join('')}
+      ${del}
     </div>`;
 }
 
-// Moves the whole order to its next stage: waiting pieces → ready, or (once all are ready) → picked up.
+// Moves the whole order to its next stage: waiting pieces → ready, or (once all are ready) → collected.
 function buildOrderNextButton(order) {
   const items   = order.objects ?? [];
   if (!items.length) return '';
@@ -837,7 +978,7 @@ function buildOrderNextButton(order) {
   }
   if (ready) {
     return `<button type="button" class="act act-sm act-pickup" data-bulk="picked_up" data-order-id="${id}" ${busy ? 'disabled' : ''}>
-      ${busy ? 'Saving…' : `${ICON_BAG} Mark ${all(ready)}picked up`}</button>`;
+      ${busy ? 'Saving…' : `${ICON_BAG} Mark ${all(ready)}collected`}</button>`;
   }
   return `<span class="act-done">${ICON_CHECK} Collected</span>`;
 }
@@ -849,8 +990,11 @@ function buildOrderBox(order) {
   const boxes = [...new Set(ready.map(i => i.container).filter(Boolean))];
   const missing = ready.some(i => !i.container);
   const id = escHtml(order.id);
-  if (!boxes.length) return `<button type="button" class="ord-box none" data-order-id="${id}">${ICON_BOX} No container</button>`;
-  return `<button type="button" class="ord-box" data-order-id="${id}" title="Move the ready pieces">${ICON_BOX} ${boxes.length > 1 ? 'Boxes' : 'Box'} ${escHtml(boxes.join(', '))}${missing ? ' + ?' : ''}</button>`;
+  if (!boxes.length) {
+    return `<button type="button" class="ord-box tip none" data-order-id="${id}" data-tip="No container — click to set" aria-label="No container yet, set one">${ICON_BOX}?</button>`;
+  }
+  const value = `${boxes.join(', ')}${missing ? ', ?' : ''}`;
+  return `<button type="button" class="ord-box tip" data-order-id="${id}" data-tip="Container ${escHtml(value)}" aria-label="Container ${escHtml(value)}, move">${ICON_BOX}${escHtml(value)}</button>`;
 }
 
 function buildTrack(status) {
@@ -876,7 +1020,7 @@ function buildItemRow(item) {
       ${saving ? 'Saving…' : `${ICON_CHECK} Mark ready`}</button>`;
   } else if (item.status === 'ready') {
     action = `<button type="button" class="act act-pickup status-btn" data-object-id="${id}" data-next="picked_up" ${saving ? 'disabled' : ''}>
-      ${saving ? 'Saving…' : `${ICON_BAG} Mark picked up`}</button>`;
+      ${saving ? 'Saving…' : `${ICON_BAG} Mark collected`}</button>`;
   } else {
     const when = fmtDate(item.picked_up_at);
     action = `<span class="act-done">${ICON_CHECK} Collected${when ? ` ${escHtml(when)}` : ''}</span>`;
@@ -884,13 +1028,52 @@ function buildItemRow(item) {
 
   return `
     <div class="pc-card${item.status === 'picked_up' ? ' is-done' : ''}">
-      <div class="pc-name">${code ? `<span class="pc-code">${escHtml(code)}</span>` : ''}<span>${escHtml(name)}</span>
+      <div style="min-width:0;">
+        <div class="pc-name">${code ? `<span class="pc-code">${escHtml(code)}</span>` : ''}<span>${escHtml(name)}</span></div>
         ${item.status === 'ready' ? (item.container
-          ? `<button type="button" class="pc-box" data-object-id="${id}" title="Move to another container">${ICON_BOX} ${escHtml(item.container)}</button>`
-          : `<button type="button" class="pc-box none" data-object-id="${id}">${ICON_BOX} Set container</button>`) : ''}</div>
+          ? `<button type="button" class="pc-box" data-object-id="${id}" title="Move to another container">${ICON_BOX}In <b>${escHtml(item.container)}</b></button>`
+          : `<button type="button" class="pc-box none" data-object-id="${id}">${ICON_BOX}No container — set</button>`) : ''}
+      </div>
       ${buildTrack(item.status)}
       ${action}
     </div>`;
+}
+
+// ─── Delete ───────────────────────────────────────────────────────────────────
+
+// Deletes the order and its pieces. Pieces still waiting are unpainted blanks — offered back into stock,
+// which is what you want when the order was entered by mistake.
+async function deleteOrder(el, order) {
+  if (!order) return;
+  const items   = order.objects ?? [];
+  const waiting = items.filter(i => i.status === 'received').length;
+  const num     = fmtNum(order.order_number);
+  const plural  = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const who     = escHtml(order.customers?.name ?? 'no customer');
+  const deleted = await confirmDanger({
+    title: `Delete order ${num}?`,
+    body: items.length
+      ? `Order <b>${escHtml(num)}</b> for <b>${who}</b> and its <b>${plural(items.length, 'piece')}</b> are deleted. The customer stays. This can't be undone.`
+      : `Order <b>${escHtml(num)}</b> for <b>${who}</b> has no pieces. The customer stays. This can't be undone.`,
+    check: waiting ? { label: `Put the ${plural(waiting, 'waiting blank')} back in stock`, checked: true } : null,
+    confirmLabel: 'Delete order',
+    run: async restock => {
+      const { data, error } = await supabase.rpc('delete_order', { p_order_id: order.id, p_restock: !!restock });
+      if (error) {
+        logEvent('error', `Couldn't delete order ${num}: ${error.message}`);
+        return `Couldn't delete — ${error.message}`;
+      }
+      const r = data?.[0] ?? {};
+      logEvent('info', `Deleted order ${num} for ${order.customers?.name ?? '—'} (${r.deleted_pieces ?? 0} pieces` +
+        `${r.restocked ? `, ${r.restocked} back in stock` : ''})`);
+      return null;
+    },
+  });
+  if (!deleted) return;
+  expandedIds.delete(order.id);
+  pendingWa.delete(order.id);
+  if (allOrders.length === 1 && currentPage > 1) currentPage--;
+  loadOrders(el);
 }
 
 // ─── Expand / collapse ────────────────────────────────────────────────────────
@@ -1067,6 +1250,7 @@ async function changeStatus(el, items, newStatus, { isUndo = false, container } 
     showToast(el, { html: `Couldn't save — ${escHtml(error.message)}`, tone: 'error' });
     return;
   }
+  loadRemindCount(el); // collecting (or undoing) changes which orders need a reminder
   if (!settings().undoBar) return; // turned off in Settings (errors above still show)
   if (isUndo) {
     showToast(el, { html: `Undone — ${escHtml(label)} back to ${STATUS_LABEL[newStatus].toLowerCase()}`, duration: 3500 });
@@ -1089,7 +1273,7 @@ async function changeStatus(el, items, newStatus, { isUndo = false, container } 
     const left = (order?.objects ?? []).filter(i => i.status === 'received').length;
     html = `<strong>${escHtml(label)}</strong> ${items.length === 1 ? 'is' : 'are'} ready${inBox} · ${left} more to go`;
   } else {
-    html = `<strong>${escHtml(label)}</strong> picked up${wa.state === 'done' ? ` · order ${ordNum} complete` : ''}`;
+    html = `<strong>${escHtml(label)}</strong> collected${wa.state === 'done' ? ` · order ${ordNum} complete` : ''}`;
   }
   actions.push(undo);
   showToast(el, { html, actions });
@@ -1142,23 +1326,27 @@ function wireWhatsAppButtons(el) {
   el.querySelectorAll('.wa-send-order').forEach(btn => {
     btn.addEventListener('click', () => {
       const order = allOrders.find(o => o.id === btn.dataset.orderId);
-      if (order) sendWhatsApp(el, order);
+      if (order) sendWhatsApp(el, order, btn.dataset.kind || 'ready');
     });
   });
   el.querySelectorAll('#orders-body .wa-yes').forEach(btn => btn.addEventListener('click', () => confirmSent(el, btn.dataset.orderId)));
   el.querySelectorAll('#orders-body .wa-no').forEach(btn => btn.addEventListener('click', () => openWhyDialog(el, btn.dataset.orderId)));
   el.querySelectorAll('#orders-body .wa-check').forEach(btn => btn.addEventListener('click', () => checkChat(el, btn.dataset.orderId)));
+  el.querySelectorAll('#orders-body .wa-open-chat').forEach(btn => btn.addEventListener('click', () => checkChat(el, btn.dataset.orderId)));
 }
 
 // Opens the customer's WhatsApp chat with the message for the whole order typed in, then records
 // notified_at on the pieces waiting for pickup. Only allowed once no piece is still being fired.
 // Runs synchronously up to openWhatsApp() so the browser allows the new tab.
-function sendWhatsApp(el, order) {
+const TEMPLATE_KEY = { ready: 'messageTemplate', reminder1: 'reminder1Template', reminder2: 'reminder2Template' };
+
+function sendWhatsApp(el, order, kind = 'ready') {
   const all   = order.objects ?? [];
   const items = all.filter(i => i.status === 'ready');
   if (!items.length || all.some(i => i.status === 'received')) return;
   const customer = order.customers;
-  const text = buildReadyMessage(settings().messageTemplate, customer?.name, order.order_number, items.map(i => i.object_types?.name ?? 'piece'));
+  const template = settings()[TEMPLATE_KEY[kind]] || SETTING_DEFAULTS[TEMPLATE_KEY[kind]];
+  const text = buildReadyMessage(template, customer?.name, order.order_number, items.map(i => i.object_types?.name ?? 'piece'));
   if (!openWhatsApp(customer?.phone, text)) {
     recordNotSent(el, order.id, "Phone number can't be used for WhatsApp");
     showToast(el, { html: `${escHtml(customer?.name ?? 'This customer')}'s phone number can't be used for WhatsApp — fix it in Supabase.`, tone: 'error' });
@@ -1167,11 +1355,15 @@ function sendWhatsApp(el, order) {
   const openedAt = new Date().toISOString();
   if (!settings().confirmSent) {
     // Confirmation turned off in Settings: opening the chat counts as telling the customer
-    markTold(el, order, items, openedAt);
+    if (kind === 'ready') markTold(el, order, items, openedAt);
+    else saveReminder(el, order, kind, openedAt);
+    logEvent('info', `WhatsApp ${KIND_LABEL[kind]} sent — order ${fmtNum(order.order_number)} (${customer?.name ?? ''})`,
+      { kind: 'wa_opened', message: kind, order_id: order.id, order_number: order.order_number, opened_at: openedAt });
     return;
   }
   // Nothing is saved yet — the owner confirms "sent" (or says why not) when back from WhatsApp
   pendingWa.set(order.id, {
+    kind,
     openedAt,
     orderNumber: order.order_number,
     name: customer?.name ?? '',
@@ -1179,8 +1371,27 @@ function sendWhatsApp(el, order) {
     itemIds: items.map(i => i.id),
   });
   renderOrders(el, allOrders);
-  logEvent('info', `WhatsApp opened — order ${fmtNum(order.order_number)} (${customer?.name ?? ''})`,
-    { kind: 'wa_opened', order_id: order.id, order_number: order.order_number, opened_at: openedAt });
+  logEvent('info', `WhatsApp ${kind === 'ready' ? '' : `${KIND_LABEL[kind]} `}opened — order ${fmtNum(order.order_number)} (${customer?.name ?? ''})`,
+    { kind: 'wa_opened', message: kind, order_id: order.id, order_number: order.order_number, opened_at: openedAt });
+}
+
+// Records a pickup reminder as sent (orders.reminder1_at / reminder2_at). Returns true when saved.
+async function saveReminder(el, order, kind, at) {
+  const col  = kind === 'reminder2' ? 'reminder2_at' : 'reminder1_at';
+  const prev = order[col];
+  order[col] = at;
+  renderOrders(el, allOrders);
+  const { error } = await supabase.from('orders').update({ [col]: at }).eq('id', order.id);
+  if (error) {
+    order[col] = prev;
+    if (!pageSignal?.aborted) renderOrders(el, allOrders);
+    logEvent('error', `Couldn't save ${KIND_LABEL[kind]} for order ${fmtNum(order.order_number)}: ${error.message}`);
+    showToast(el, { html: `Couldn't save the reminder — ${escHtml(error.message)}`, tone: 'error' });
+    return false;
+  }
+  if (filters.wa === 'remind' && !pageSignal?.aborted) loadOrders(el); // done — it leaves the "Reminder due" list
+  else loadRemindCount(el);
+  return true;
 }
 
 // Saves notified_at straight away (used when "Confirm sent messages" is off).
@@ -1194,7 +1405,9 @@ async function markTold(el, order, items, at) {
     if (!pageSignal?.aborted) renderOrders(el, allOrders);
     logEvent('error', `WhatsApp opened but marking order ${fmtNum(order.order_number)} as told failed: ${error.message}`);
     showToast(el, { html: `WhatsApp opened, but saving failed — ${escHtml(error.message)}`, tone: 'error' });
+    return;
   }
+  loadRemindCount(el);
 }
 
 // Opens the customer's chat with nothing typed, so the owner can see whether the message is there.
@@ -1241,7 +1454,7 @@ async function loadPendingWa(el) {
 
   const { data: pieces } = await supabase
     .from('objects')
-    .select('id, order_id, status, notified_at, orders(order_number, customers(name, phone))')
+    .select('id, order_id, status, notified_at, orders(order_number, reminder1_at, reminder2_at, customers(name, phone))')
     .in('order_id', opened.map(([id]) => id));
   if (pageSignal?.aborted) return;
 
@@ -1251,9 +1464,13 @@ async function loadPendingWa(el) {
     const mine  = (pieces ?? []).filter(x => x.order_id === orderId);
     const ready = mine.filter(x => x.status === 'ready');
     if (!ready.length || mine.some(x => x.status === 'received')) continue;
-    if (ready.some(x => x.notified_at && x.notified_at >= openedAt)) continue; // answered ✓ already
+    const kind = e.details.message ?? 'ready';
     const o = mine[0].orders;
+    if (kind === 'ready' && ready.some(x => x.notified_at && ms(x.notified_at) >= ms(openedAt))) continue; // answered ✓ already
+    const savedAt = kind === 'reminder2' ? o?.reminder2_at : kind === 'reminder1' ? o?.reminder1_at : null;
+    if (savedAt && ms(savedAt) >= ms(openedAt)) continue;
     pendingWa.set(orderId, {
+      kind,
       openedAt,
       orderNumber: o?.order_number,
       name: o?.customers?.name ?? '',
@@ -1269,6 +1486,22 @@ async function confirmSent(el, orderId) {
   const p = pendingWa.get(orderId);
   if (!p) return;
   pendingWa.delete(orderId);
+  if (p.kind && p.kind !== 'ready') {
+    const order = allOrders.find(o => o.id === orderId);
+    if (order) { if (!(await saveReminder(el, order, p.kind, p.openedAt))) { pendingWa.set(orderId, p); renderOrders(el, allOrders); } return; }
+    // the order isn't on this page: save it directly
+    const col = p.kind === 'reminder2' ? 'reminder2_at' : 'reminder1_at';
+    const { error } = await supabase.from('orders').update({ [col]: p.openedAt }).eq('id', orderId);
+    if (error) {
+      pendingWa.set(orderId, p);
+      logEvent('error', `Couldn't save ${KIND_LABEL[p.kind]} for order ${fmtNum(p.orderNumber)}: ${error.message}`);
+      showToast(el, { html: `Couldn't save — ${escHtml(error.message)}`, tone: 'error' });
+    }
+    renderOrders(el, allOrders);
+    if (filters.wa === 'remind') loadOrders(el);
+    else loadRemindCount(el);
+    return;
+  }
   const local = p.itemIds.map(findItem).filter(Boolean);
   const prev  = local.map(i => i.notified_at);
   local.forEach(i => { i.notified_at = p.openedAt; });
@@ -1281,7 +1514,9 @@ async function confirmSent(el, orderId) {
     if (!pageSignal?.aborted) renderOrders(el, allOrders);
     logEvent('error', `Couldn't mark order ${fmtNum(p.orderNumber)} as told: ${error.message}`);
     showToast(el, { html: `Couldn't save — ${escHtml(error.message)}`, tone: 'error' });
+    return;
   }
+  loadRemindCount(el);
 }
 
 async function confirmAllSent(el) {
@@ -1316,7 +1551,7 @@ function renderTray(el) {
   if (pending.length === 1) {
     const [id, p] = pending[0];
     head = `<div class="tray-row">${ICON_WA}
-      <span class="tray-text">Order <strong>${escHtml(fmtNum(p.orderNumber))}</strong> · ${first(p.name)} — did it go out?
+      <span class="tray-text">${p.kind && p.kind !== 'ready' ? `${capital(KIND_LABEL[p.kind])} · o` : 'O'}rder <strong>${escHtml(fmtNum(p.orderNumber))}</strong> · ${first(p.name)} — did it go out?
         <span class="when" style="color:#a08850;font-size:12px;">opened ${escHtml(fmtWhen(p.openedAt))}</span></span>
       <button type="button" class="ask-chip check" data-check="${escHtml(id)}" aria-label="Open the chat to check" title="Open the chat to check">?</button>
       <button type="button" class="ask-btn yes" data-yes="${escHtml(id)}">${ICON_CHECK} Sent</button>
@@ -1328,7 +1563,7 @@ function renderTray(el) {
       <button type="button" class="ask-btn" data-toggle aria-expanded="${trayOpen}">${trayOpen ? 'Close' : 'Review'}</button></div>`;
   }
   const list = pending.length > 1 && trayOpen ? `<div class="tray-list">${pending.map(([id, p]) => `
-      <div class="tray-item"><span class="num">${escHtml(fmtNum(p.orderNumber))}</span><span class="who">${escHtml(p.name)}</span>
+      <div class="tray-item"><span class="num">${escHtml(fmtNum(p.orderNumber))}</span><span class="who">${escHtml(p.name)}${p.kind && p.kind !== 'ready' ? ` <span style="color:#2D7CAD;font-size:11px;">· ${KIND_LABEL[p.kind]}</span>` : ''}</span>
         <span class="when">${escHtml(fmtWhen(p.openedAt))}</span>
         <button type="button" class="ask-chip check" data-check="${escHtml(id)}" aria-label="Open order ${escHtml(fmtNum(p.orderNumber))}'s chat to check" title="Open the chat to check">?</button>
         <button type="button" class="ask-chip yes" data-yes="${escHtml(id)}" aria-label="Order ${escHtml(fmtNum(p.orderNumber))} sent" title="Sent">✓</button>
@@ -1343,6 +1578,41 @@ function renderTray(el) {
   tray.querySelector('[data-toggle]')?.addEventListener('click', () => { trayOpen = !trayOpen; renderTray(el); });
 }
 
+// ─── Pickup reminders banner ──────────────────────────────────────────────────
+
+// How many orders have a reminder due right now (any page), from order_list.reminder_due.
+async function loadRemindCount(el) {
+  const seq = ++remindSeq;
+  if (!settings().reminders) { remindDue = 0; setRemindBadge(0); renderRemindBanner(el); return; }
+  const { count, error } = await supabase.from('order_list').select('id', { count: 'exact', head: true }).gt('reminder_due', 0);
+  if (seq !== remindSeq || pageSignal?.aborted) return;
+  remindDue = error ? 0 : count ?? 0;   // view not updated yet → no banner
+  if (!error) setRemindBadge(remindDue);   // the sidebar number follows along
+  renderRemindBanner(el);
+}
+
+function renderRemindBanner(el) {
+  const box = el.querySelector('#remind-banner');
+  if (!box) return;
+  const showing = filters.wa === 'remind';
+  box.hidden = !remindDue && !showing;
+  if (box.hidden) return;
+  const days = Number(settings().reminderDays) || 14;
+  box.innerHTML = showing
+    ? `${PIN_BELL}<span>Showing the orders that need a pickup reminder. Once a reminder is sent, the order leaves this list.</span>
+       <button type="button" data-remind-show="0">Show all orders</button>`
+    : `${PIN_BELL}<span><strong>${remindDue} order${remindDue === 1 ? '' : 's'}</strong> ${remindDue === 1 ? 'needs' : 'need'} a pickup reminder —
+       told ${days}+ days ago and not collected.</span>
+       <button type="button" data-remind-show="1">Show ${remindDue === 1 ? 'it' : 'them'}</button>`;
+  box.querySelector('[data-remind-show]').addEventListener('click', e => {
+    filters.wa = e.currentTarget.dataset.remindShow === '1' ? 'remind' : 'all';
+    currentPage = 1;
+    renderFilters(el, pageSignal);
+    renderRemindBanner(el);
+    loadOrders(el);
+  });
+}
+
 // ─── "Why didn't it go out?" ──────────────────────────────────────────────────
 
 let whyOrderId = null;
@@ -1353,7 +1623,7 @@ function openWhyDialog(el, orderId) {
   const order = allOrders.find(o => o.id === orderId);
   whyOrderId  = orderId;
   el.querySelector('#why-sub').textContent =
-    `Order ${fmtNum(p?.orderNumber ?? order?.order_number)} · ${p?.name ?? order?.customers?.name ?? ''}`;
+    `${p?.kind && p.kind !== 'ready' ? `${capital(KIND_LABEL[p.kind])} · ` : ''}Order ${fmtNum(p?.orderNumber ?? order?.order_number)} · ${p?.name ?? order?.customers?.name ?? ''}`;
   el.querySelector('#why-chips').innerHTML = waReasons
     .map(r => `<button type="button" class="why-chip" data-reason="${escHtml(r)}">${escHtml(r)}</button>`).join('');
   el.querySelectorAll('.why-chip').forEach(c => c.addEventListener('click', () => saveWhy(el, c.dataset.reason)));
@@ -1440,6 +1710,11 @@ function nextDay(ymd) {
   return todayLocal(d);
 }
 
+// Filters behind the "Filters" button that are on (the search box is always visible, so it isn't counted)
+function hiddenFilterCount() {
+  return activeCount(filters, FILTER_DEFAULTS) - (filters.q !== FILTER_DEFAULTS.q ? 1 : 0);
+}
+
 function renderFilters(el, signal) {
   const box = el.querySelector('#ord-filters');
   const typeOptions = [['', 'All types'], ...[...allObjectTypes]
@@ -1448,17 +1723,20 @@ function renderFilters(el, signal) {
   box.innerHTML = `
     <div class="fbar-row">
       ${searchBox('ord-search', 'Search by name, phone or order number…', filters.q)}
+      ${filterToggle(hiddenFilterCount(), filtersOpen)}
       ${selectBox('sort', 'Sort', [['newest', 'Newest first'], ['oldest', 'Oldest first']], filters.sort)}
     </div>
-    <div class="fbar-row">
-      ${chipGroup('stage', 'Status', [['all', 'All'], ['waiting', 'Waiting'], ['ready', 'Ready'], ['open', 'Not collected'], ['collected', 'Collected']], filters.stage)}
-      ${chipGroup('wa', 'WhatsApp', [['all', 'Any'], ['to_tell', 'To tell'], ['told', 'Told']], filters.wa)}
-    </div>
-    <div class="fbar-row">
-      ${selectBox('type', 'Object type', typeOptions, filters.type)}
-      ${selectBox('container', 'Container', [['', 'Any'], ...(settings().containers ?? SETTING_DEFAULTS.containers).map(c => [c, c])], filters.container)}
-      ${dateRange('Date in', filters.from, filters.to)}
-      ${clearButton(activeCount(filters, FILTER_DEFAULTS))}
+    <div class="fbar-more" id="fbar-more" ${filtersOpen ? '' : 'hidden'}>
+      <div class="fbar-row">
+        ${chipGroup('stage', 'Status', [['all', 'All'], ['waiting', 'Waiting'], ['ready', 'Ready'], ['collected', 'Collected']], filters.stage)}
+        ${chipGroup('wa', 'WhatsApp', [['all', 'Any'], ['to_tell', 'To tell'], ['told', 'Told'], ['remind', 'Reminder due']], filters.wa)}
+      </div>
+      <div class="fbar-row">
+        ${selectBox('type', 'Object type', typeOptions, filters.type)}
+        ${selectBox('container', 'Container', [['', 'Any'], ...(settings().containers ?? SETTING_DEFAULTS.containers).map(c => [c, c])], filters.container)}
+        ${dateRange('Date in', filters.from, filters.to)}
+        ${clearButton(activeCount(filters, FILTER_DEFAULTS))}
+      </div>
     </div>`;
   const typeSelect = box.querySelector('[data-fselect="type"]');
   // the searchable picker copies the select's inline style, so give it the filter look here
@@ -1466,11 +1744,24 @@ function renderFilters(el, signal) {
     "font-family:'Inter',sans-serif;font-size:12.5px;color:#4a3a2c;min-width:230px;outline:none;";
   initCombobox(typeSelect, { signal }); // searchable — there are hundreds of types
 
-  const reload = () => { currentPage = 1; updateClear(box, activeCount(filters, FILTER_DEFAULTS)); loadOrders(el); };
+  box.querySelector('[data-ftoggle]').addEventListener('click', e => {
+    filtersOpen = !filtersOpen;
+    box.querySelector('#fbar-more').hidden = !filtersOpen;
+    e.currentTarget.setAttribute('aria-expanded', filtersOpen);
+  });
+
+  const reload = () => {
+    currentPage = 1;
+    updateClear(box, activeCount(filters, FILTER_DEFAULTS));
+    updateToggle(box, hiddenFilterCount());
+    renderRemindBanner(el);
+    loadOrders(el);
+  };
   box.querySelector('#ord-search').addEventListener('input', debounce(e => { filters.q = e.target.value; reload(); }, 250));
   wireFilterControls(box, (name, value) => { filters[name] = value; reload(); }, () => {
     filters = { ...FILTER_DEFAULTS, sort: filters.sort };
     renderFilters(el, signal);
+    renderRemindBanner(el);
     currentPage = 1;
     loadOrders(el);
   });
@@ -1637,51 +1928,16 @@ function wireModal(el, signal) {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Creating…';
 
-    // 1. Insert order
-    const { data: newOrder, error: orderError } = await supabase
-      .from('orders')
-      .insert({ customer_id: customerId, received_at: receivedAt, notes: notes || null })
-      .select('id, order_number')
-      .single();
-
-    if (orderError) {
+    const result = await createOrder({ customerId, receivedAt, notes, typeIds: selectedTypes });
+    if (result.error) {
       submitBtn.disabled = false;
       submitBtn.textContent = 'Create Order';
-      logEvent('error', `Couldn't create order: ${orderError.message}`);
-      errorDiv.textContent = 'Failed to create order: ' + orderError.message;
+      errorDiv.textContent = result.error;
       errorDiv.style.display = 'block';
       return;
     }
-
-    // 2. Insert each object
-    const objectInserts = selectedTypes.map(typeId => ({
-      order_id:       newOrder.id,
-      object_type_id: typeId,
-      status:         'received',
-    }));
-
-    const { error: objError } = await supabase
-      .from('objects')
-      .insert(objectInserts)
-      .select('id');
-
-    if (objError) {
-      // Don't leave an empty order behind
-      const { error: undoError } = await supabase.from('orders').delete().eq('id', newOrder.id);
-      logEvent('error', `Couldn't add pieces to order ${fmtNum(newOrder.order_number)}: ${objError.message}` +
-        (undoError ? ` — and removing the empty order failed: ${undoError.message}` : ' — empty order removed'));
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Create Order';
-      errorDiv.textContent = undoError
-        ? `Couldn't add the objects (${objError.message}). Order ${fmtNum(newOrder.order_number)} was created empty — delete it in Supabase.`
-        : `Couldn't add the objects: ${objError.message}. Nothing was saved.`;
-      errorDiv.style.display = 'block';
-      return;
-    }
-
-    // 3. Lower raw_stock once per type, from the current value in the database
-    const stockWarnings = await decrementStock(countBy(selectedTypes, id => id));
-    if (stockWarnings.length) logEvent('warning', `Order ${fmtNum(newOrder.order_number)}: ${stockWarnings.join(' ')}`);
+    const { order: newOrder, warnings: stockWarnings } = result;
+    result.stock.forEach((next, id) => { const t = allObjectTypes.find(x => x.id === id); if (t) t.raw_stock = next; });
 
     submitBtn.disabled = false;
     submitBtn.textContent = 'Create Order';
@@ -1700,32 +1956,6 @@ function wireModal(el, signal) {
   });
 
   wireNewCustomer(el, form, cbCustomer);
-}
-
-// Lowers raw_stock by the number of new objects of each type.
-// Returns readable warnings for anything that didn't go cleanly.
-async function decrementStock(countsByType) {
-  const { data: fresh, error } = await supabase
-    .from('object_types')
-    .select('id, name, raw_stock')
-    .in('id', [...countsByType.keys()]);
-  if (error) return [`Stock wasn't updated (${error.message}). Adjust it on the Stock page.`];
-
-  const warnings = [];
-  for (const t of fresh) {
-    const used = countsByType.get(t.id);
-    const next = Math.max(0, t.raw_stock - used);
-    if (t.raw_stock < used) warnings.push(`${t.name}: only ${t.raw_stock} in stock but ${used} used, so stock is now 0.`);
-
-    const { error: upError } = await supabase.from('object_types').update({ raw_stock: next }).eq('id', t.id);
-    if (upError) {
-      warnings.push(`${t.name}: stock wasn't updated (${upError.message}).`);
-      continue;
-    }
-    const local = allObjectTypes.find(x => x.id === t.id);
-    if (local) local.raw_stock = next;
-  }
-  return warnings;
 }
 
 // ─── New customer inline form ─────────────────────────────────────────────────

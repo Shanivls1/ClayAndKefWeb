@@ -43,6 +43,8 @@ One row per customer visit. A single order groups all objects a customer leaves 
 | customer_id  | uuid FK → customers |                       |
 | received_at  | timestamp | when the customer came in          |
 | notes        | text      | optional order-level notes         |
+| reminder1_at | timestamptz | pickup reminder 1 confirmed sent (see Pickup reminders) |
+| reminder2_at | timestamptz | pickup reminder 2 confirmed sent   |
 | created_at   | timestamp |                                    |
 
 ### `object_types`
@@ -109,6 +111,28 @@ Run by hand in the Supabase SQL Editor — the app's anon key can't change the s
   the parts and the not-imported report hold customer data and are git-ignored.
 - Triggers: `trg_set_order_number` (orders; numbers 1–1000 cycling, see `migrations/20261014_order_numbers_1_to_1000.sql`), `trg_is_returning` (objects → keeps `customers.is_returning` current, via orders),
   `log_activity` (all four tables). There is no WhatsApp webhook trigger anymore.
+- Deleting (`migrations/20261015_delete_functions.sql`, RPCs, all-or-nothing): `delete_order(p_order_id, p_restock)` — the order
+  and its pieces, optionally putting waiting blanks back in stock; `delete_customer(p_customer_id)` — with all their orders
+  and pieces; `delete_object_type(p_type_id)` — refused while any piece uses it. The app confirms each with `confirm.js`
+  (`confirmDanger`); every deleted row stays in `activity_log`.
+
+### Sign-in and access (security)
+
+The dashboard is on the public internet (Vercel), so **the database is the lock, not the page**
+(`migrations/20261016_lock_down.sql`):
+- The anon (public) key can do **nothing**: all grants revoked from `anon`, also for objects created later.
+- Every table has row-level security with one rule: allowed only when `public.is_staff()` — the signed-in user
+  (Supabase Auth, email + password) is listed in `public.staff`. A signed-in account that isn't listed sees 0 rows.
+- All views are `security_invoker`, so the table rules apply through them. `delete_*` functions: `authenticated` only.
+- `activity_log`: staff read it and insert `source = 'app'` rows; the `log_activity` trigger (security definer) writes the rest.
+- Storage bucket `object-type-images`: images are viewable by URL; only staff upload or change them.
+- **Any new table, view or function must follow the same pattern** (RLS + `is_staff()` policy, no anon grant, views with
+  `security_invoker = true`) or it is either unreachable or open.
+- Add a staff member: create their account in Supabase → Authentication → Users → Add user, then **Settings → People with
+  access** → their email → Give access (`add_staff` / `remove_staff` / `list_staff`, `migrations/20261016_staff_admin.sql`:
+  staff only; you can't remove yourself or the last person). Creating accounts needs the admin key, so it stays in Supabase.
+- In the app, `auth.js` shows the sign-in screen until a staff member is signed in (`requireStaff()` in `app.js` runs
+  before the router); Sign out (bottom of the sidebar) reloads the page so nothing stays in memory.
 
 ### Environment variables
 
@@ -116,6 +140,9 @@ Run by hand in the Supabase SQL Editor — the app's anon key can't change the s
 VITE_SUPABASE_URL=
 VITE_SUPABASE_ANON_KEY=
 ```
+
+Locally they live in `env.js` (git-ignored; copy `env.example.js`). On Vercel they are project Environment Variables;
+the build (`vercel.json` → `scripts/write-env.mjs`) writes `env.js` from them. Without them the page says so.
 
 ### WhatsApp notification logic
 
@@ -144,6 +171,21 @@ All of it lives in `whatsapp.js` so it can later be swapped for an automated sen
 - Pieces are identified to the owner by type + order number only — never by `object_number`.
 - The owner presses Enter in WhatsApp to actually send — `notified_at` means "chat opened", not "delivered".
 - Phones are normalized to international digits: a leading `0` becomes `972`.
+
+### Pickup reminders
+
+`migrations/20261015_reminders.sql`. For orders whose customer was told (all `ready` pieces have `notified_at`) but
+that still have `ready` pieces: **reminder 1** is due `reminderDays` (default 14) after the latest `notified_at`,
+**reminder 2** `reminderDays` after reminder 1, then nothing more. A reminder sent before a newer "ready" message
+(Send again) no longer counts, so the count starts over. The rule is in two places that must agree:
+`order_list.reminder_due` (0/1/2, used for the "N orders need a pickup reminder" banner and the WhatsApp → Reminder due
+filter) and `reminderInfo()` in `pages/orders.js` (row button "Send reminder" / "Send reminder 2", bell pin, opened-order strip).
+Sending works like the first message: the chat opens with `reminder1Template` / `reminder2Template`, the `wa_opened`
+log event carries `details.message` = `reminder1` / `reminder2`, and only ✓ saves `orders.reminder1_at` / `reminder2_at`
+(✕ records a reason as usual). Nothing is sent automatically.
+The sidebar shows the number of orders with a reminder due as a blue badge on **Orders** (`navbadge.js`): loaded at
+start, on every page change, when the tab comes back into view and every 10 minutes; the Orders page pushes its own
+count with `setRemindBadge()`, and Settings refreshes it after changing reminders or days. Hidden at 0, "99+" above 99.
 
 ---
 
@@ -175,8 +217,25 @@ Every list page uses the shared controls in `listui.js` (filter bar: search, chi
   open_orders). Orders fetches the page's ids from the view, then those orders in full.
 - **Stock** filters/sorts/pages in the browser (all types are loaded anyway). **Logs** filters on `activity_log`.
 - Orders search: 1–4 digits (or `#12`) = order number, longer digits = phone, text = name or phone.
+- Orders: search and sort are always visible; the other filters (Status: All / Waiting / Ready / Collected,
+  WhatsApp, object type, container, dates) sit behind a **Filters** button, collapsed when the page opens. Its badge
+  counts the hidden filters that are on (`filterToggle` / `updateToggle` in `listui.js`).
 
 ---
+
+## Home page
+
+`pages/home.js`, route `#/home` — the page the app opens on (router default) and the first sidebar item. The everyday jobs:
+- **New order** in three steps: customer (instant search over all customers by name or phone digits — `050…`, `+972-50…`
+  and `0501…` all match — or "+ New customer" prefilled from what was typed, with a duplicate-phone check), pieces
+  (quick picks = the 10 types used most in the latest 300 orders, a type search with Enter to add, − / + amounts),
+  optional note and date. A new customer is saved first, then the order; on success the order number is shown large
+  ("write this on every piece") with **Start the next order**. Order creation is shared with the Orders page: `neworder.js`
+  (`createOrder` — inserts the order and pieces, removes an empty order if pieces fail, lowers stock).
+- **Customer collecting?** — open orders (stage waiting/ready) by order number, phone or name; **Collect** marks the ready
+  pieces collected, with Undo.
+- **To do** — pieces waiting to be fired, WhatsApp to send, pickup reminders due; each links to Orders already filtered.
+  The Orders page reads `#/orders?stage=…&wa=…&q=…` once on load (the router ignores the `?…` part when choosing the page).
 
 ## Settings
 
@@ -189,6 +248,9 @@ Table `app_settings` (one row, `id = 1`, JSON in `data`; created by `supabase/mi
 | `confirmSent`     | true    | ask "Sent? ✓ ✕" after opening WhatsApp; off → opening counts as told immediately |
 | `askWhyNotSent`   | true    | ✕ asks for a reason; off → records "Not sent" (only matters when `confirmSent` is on) |
 | `undoBar`         | true    | bar with Undo / Send WhatsApp after status changes; off → no bar (errors still show) |
+| `reminders`       | true    | offer pickup reminders (off → no banner, buttons or "due" orders) |
+| `reminderDays`    | 14      | days before reminder 1 (after the ready message) and reminder 2 (after reminder 1) |
+| `reminder1Template` / `reminder2Template` | `DEFAULT_REMINDER1` / `2` in `whatsapp.js` | reminder texts, same placeholders; edited in the Reminder 1 / 2 tabs |
 | `containers`      | A–J, Cbis, מחסן שחור, מחסן שקוף, מדף, שקית בקופה | choices in the container picker (Settings → Containers) |
 
 The Orders page reads settings with `loadSettings({ fresh: true })` on mount. Changes are logged as app `info` events.

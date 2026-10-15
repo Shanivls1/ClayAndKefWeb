@@ -1,6 +1,7 @@
 import { supabase } from '../supabase.js';
 import { escHtml, fmtDate, pgQuote, debounce } from '../utils.js';
 import { logEvent } from '../log.js';
+import { confirmDanger, deleteStyles, ICON_TRASH } from '../confirm.js';
 import { LIST_CSS, searchBox, chipGroup, selectBox, clearButton, wireFilters, activeCount, updateClear, renderPager } from '../listui.js';
 
 const AVATAR_COLORS = ['#e8d5c0', '#dcc9b4', '#d4bfaa', '#c8b49e', '#bda892'];
@@ -44,7 +45,7 @@ export function render() {
       <rect width="100%" height="100%" filter="url(#ck-noise-customers)"/>
     </svg>
     <!-- Radial glow top-right -->
-    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
+    <div style="position:fixed;top:0;right:0;width:600px;height:400px;background:radial-gradient(ellipse farthest-side at top right,rgba(156,26,77,0.08),transparent);pointer-events:none;z-index:0;"></div>
 
     <div style="padding:40px;position:relative;z-index:1;">
 
@@ -188,6 +189,7 @@ let pageSize     = 10;
 let totalCount   = 0;
 let loadSeq      = 0; // ignores responses from superseded searches
 let pageSignal   = null;
+let shownRows    = []; // the customers on the current page
 
 const SORTS = {
   name:   { label: 'Name A–Z',    apply: q => q.order('name') },
@@ -201,8 +203,13 @@ export async function mount(el, signal) {
   pageSignal  = signal;
   currentPage = 1;
   filters     = { ...DEFAULTS };
+  deleteStyles();
   renderFilters(el);
   wireModal(el, signal);
+  el.querySelector('#customers-list').addEventListener('click', e => {
+    const btn = e.target.closest('.cust-del');
+    if (btn) deleteCustomer(el, shownRows.find(c => c.id === btn.dataset.id));
+  });
   await loadCustomers(el);
 }
 
@@ -251,6 +258,7 @@ function renderRows(list, customers) {
       </div>`;
     return;
   }
+  shownRows = customers;
   list.innerHTML = customers.map((c, i) => buildRow(c, i === customers.length - 1)).join('');
 }
 
@@ -284,7 +292,42 @@ function buildRow(c, isLast) {
         <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.phone || 'No phone')} · ${objLabel}</div>
       </div>
       <div style="flex-shrink:0;">${rightEl}</div>
+      <button type="button" class="del-btn cust-del" data-id="${escHtml(c.id)}" style="flex-shrink:0;"
+        title="Delete customer" aria-label="Delete ${escHtml(c.name)}">${ICON_TRASH}</button>
     </div>`;
+}
+
+// ─── Delete ───────────────────────────────────────────────────────────────────
+
+// A customer with orders goes with all of them — so that needs an extra tick.
+async function deleteCustomer(el, c) {
+  if (!c) return;
+  const visits = Number(c.visits ?? 0);
+  const pieces = Number(c.pieces ?? 0);
+  const name   = escHtml(c.name || 'this customer');
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const deleted = await confirmDanger({
+    title: `Delete ${c.name || 'this customer'}?`,
+    body: visits
+      ? `<b>${name}</b> has <b>${plural(visits, 'order')}</b> with <b>${plural(pieces, 'piece')}</b>. They're deleted too, and drop out of the dashboard numbers. This can't be undone.`
+      : `<b>${name}</b> has no orders. This can't be undone.`,
+    check: visits ? { label: `Also delete their ${plural(visits, 'order')}`, required: true } : null,
+    confirmLabel: 'Delete customer',
+    run: async () => {
+      const { data, error } = await supabase.rpc('delete_customer', { p_customer_id: c.id });
+      if (error) {
+        logEvent('error', `Couldn't delete customer ${c.name}: ${error.message}`);
+        return `Couldn't delete — ${error.message}`;
+      }
+      const r = data?.[0] ?? {};
+      logEvent('info', `Deleted customer ${c.name} (${r.deleted_orders ?? 0} orders, ${r.deleted_pieces ?? 0} pieces)`);
+      return null;
+    },
+  });
+  if (!deleted) return;
+  // step back a page if that was the last customer on this one
+  if (shownRows.length === 1 && currentPage > 1) currentPage--;
+  loadCustomers(el);
 }
 
 function renderPagination(el) {

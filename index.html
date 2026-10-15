@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Clay & Kef</title>
+  <link rel="icon" type="image/png" href="useful_images/logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -123,6 +124,34 @@
       opacity: 1;
     }
 
+    /* Pickup reminders due (navbadge.js) — blue like the rest of the reminder UI */
+    .nav-badge {
+      position: absolute;
+      top: 5px;
+      left: calc(50% + 4px);
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: #2D7CAD;
+      color: #fff;
+      box-shadow: 0 0 0 2px #9C1A4D, 0 2px 6px rgba(20, 50, 80, 0.35);
+      font-family: 'Inter', sans-serif;
+      font-size: 10.5px;
+      font-weight: 700;
+      line-height: 18px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      pointer-events: none;
+      animation: nav-badge-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .nav-badge[hidden] { display: none; }
+    @keyframes nav-badge-in {
+      from { transform: scale(0.4); opacity: 0; }
+      to   { transform: scale(1);   opacity: 1; }
+    }
+    @media (prefers-reduced-motion: reduce) { .nav-badge { animation: none; } }
+
     /* ── Main content ── */
     #content {
       flex: 1;
@@ -130,6 +159,79 @@
       min-height: 100vh;
       overflow-y: auto;
     }
+
+    /* ── Sign-in (auth.js): nothing else shows until a staff member is signed in ── */
+    body:not([data-auth="in"]) #sidebar,
+    body:not([data-auth="in"]) #content { display: none; }
+    body[data-auth="in"] #login { display: none; }
+    body:not([data-auth]) #login { visibility: hidden; } /* still checking the saved session */
+
+    #login {
+      flex: 1;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      background:
+        radial-gradient(ellipse 60% 50% at 85% 0%, rgba(156, 26, 77, 0.08), transparent 70%),
+        radial-gradient(ellipse 50% 40% at 0% 100%, rgba(156, 26, 77, 0.05), transparent 70%),
+        #faf7f4;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 380px;
+      background: #fff;
+      border: 1px solid #ece5dc;
+      border-radius: 18px;
+      padding: 34px 30px 28px;
+      box-shadow: 0 1px 2px rgba(45, 31, 20, 0.04), 0 12px 32px rgba(45, 31, 20, 0.07);
+    }
+    .login-mark {
+      width: 52px; height: 52px; border-radius: 14px; background: #9C1A4D;
+      display: flex; align-items: center; justify-content: center; margin-bottom: 18px;
+      box-shadow: 0 6px 16px rgba(156, 26, 77, 0.25);
+    }
+    .login-mark img { height: 38px; width: auto; filter: brightness(0) invert(1); }
+    .login-card h1 { font-family: 'Caveat', cursive; font-size: 36px; font-weight: 700; color: #1a120b; line-height: 1; }
+    .login-card .sub { font-size: 14px; color: #8a7560; margin: 6px 0 24px; }
+    .login-field { margin-bottom: 14px; }
+    .login-field label { display: block; font-size: 12.5px; font-weight: 600; color: #8a7560; margin-bottom: 6px; }
+    .login-input {
+      width: 100%; height: 46px; padding: 0 14px; border: 1px solid #e6dfd6; border-radius: 10px; outline: none;
+      font-family: 'Inter', sans-serif; font-size: 15px; color: #1a120b; background: #fff;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .login-input:focus { border-color: #9C1A4D; box-shadow: 0 0 0 3px rgba(156, 26, 77, 0.1); }
+    .login-pw { position: relative; }
+    .login-pw .login-input { padding-right: 64px; }
+    #login-show {
+      position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; border-radius: 7px; padding: 6px 8px; cursor: pointer;
+      font-family: 'Inter', sans-serif; font-size: 12.5px; font-weight: 600; color: #8a7560;
+    }
+    #login-show:hover { color: #1a120b; background: #f5f0eb; }
+    #login-show:focus-visible { outline: 2px solid #9C1A4D; outline-offset: 1px; }
+    #login-error { font-size: 13px; color: #b3261e; margin: 2px 0 12px; line-height: 1.5; }
+    #login-error[hidden] { display: none; }
+    .login-go {
+      width: 100%; height: 48px; margin-top: 6px; border: none; border-radius: 11px; cursor: pointer;
+      background: #9C1A4D; color: #fff; font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 600;
+      box-shadow: 0 1px 2px rgba(156, 26, 77, 0.2), 0 6px 16px rgba(156, 26, 77, 0.16);
+      transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.12s ease;
+    }
+    .login-go:hover:not(:disabled) { background: #86163f; }
+    .login-go:active:not(:disabled) { transform: scale(0.98); }
+    .login-go:focus-visible { outline: 3px solid rgba(156, 26, 77, 0.3); outline-offset: 3px; }
+    .login-go:disabled { opacity: 0.6; cursor: wait; }
+
+    /* Sign out, at the bottom of the sidebar */
+    #sidebar .nav-spacer { flex: 1; }
+    #btn-sign-out {
+      background: none; border: none; cursor: pointer; font: inherit;
+    }
+    #btn-sign-out:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+    #btn-sign-out:active { transform: scale(0.96); }
   </style>
 </head>
 <body>
@@ -137,13 +239,22 @@
   <aside id="sidebar">
 
     <!-- Logo -->
-    <a href="#/dashboard" id="logo" title="Clay & Kef">
+    <a href="#/home" id="logo" title="Clay & Kef">
       <img src="useful_images/logo.png" alt="Clay & Kef" />
     </a>
 
     <nav>
 
       <!-- Dashboard -->
+      <a href="#/home" data-route="/home" class="nav-item">
+        <div class="nav-active-bar"></div>
+        <svg viewBox="0 0 24 24">
+          <path d="M3 10.5 12 3l9 7.5"/>
+          <path d="M5 9.5V20a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V9.5"/>
+        </svg>
+        <span class="nav-label">Home</span>
+      </a>
+
       <a href="#/dashboard" data-route="/dashboard" class="nav-item">
         <div class="nav-active-bar"></div>
         <svg viewBox="0 0 24 24">
@@ -223,7 +334,36 @@
       </a>
 
     </nav>
+    <div class="nav-spacer"></div>
+    <button type="button" id="btn-sign-out" class="nav-item" title="Sign out">
+      <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+      <span class="nav-label">Sign out</span>
+      <span id="signed-in-as" hidden></span>
+    </button>
   </aside>
+
+  <section id="login" aria-labelledby="login-title">
+    <div class="login-card">
+      <div class="login-mark"><img src="useful_images/logo.png" alt="" /></div>
+      <h1 id="login-title">Clay &amp; Kef</h1>
+      <p class="sub">Sign in to the dashboard</p>
+      <form novalidate>
+        <div class="login-field">
+          <label for="login-email">Email</label>
+          <input id="login-email" name="email" class="login-input" type="email" autocomplete="username" required />
+        </div>
+        <div class="login-field">
+          <label for="login-password">Password</label>
+          <div class="login-pw">
+            <input id="login-password" name="password" class="login-input" type="password" autocomplete="current-password" required />
+            <button type="button" id="login-show" aria-pressed="false" aria-label="Show password">Show</button>
+          </div>
+        </div>
+        <div id="login-error" role="alert" hidden></div>
+        <button type="submit" class="login-go">Sign in</button>
+      </form>
+    </div>
+  </section>
 
   <main id="content"></main>
 

@@ -32,6 +32,20 @@ export const LIST_CSS = `
     .fdate { cursor:text; }
     .fclear { background:none;border:none;padding:4px 2px;cursor:pointer;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;color:#9C1A4D;text-decoration:underline;text-underline-offset:2px; }
     .fclear[hidden] { display:none; }
+    .ftoggle {
+      display:inline-flex;align-items:center;gap:7px;padding:9px 14px;border-radius:99px;cursor:pointer;
+      border:1px solid #e0d8cf;background:#fff;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:#4a3a2c;
+      box-shadow:0 1px 3px rgba(45,31,20,.05);transition:transform .18s cubic-bezier(.34,1.56,.64,1);
+    }
+    .ftoggle:hover { background:#f7f2ec;border-color:#d4c5b2; }
+    .ftoggle:active { transform:scale(.96); }
+    .ftoggle:focus-visible { outline:2px solid #9C1A4D;outline-offset:2px; }
+    .ftoggle[aria-expanded="true"] { border-color:#9C1A4D;color:#9C1A4D; }
+    .ftoggle svg { width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round; }
+    .ftoggle-count { min-width:20px;height:20px;padding:0 6px;border-radius:99px;background:#9C1A4D;color:#fff;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center; }
+    .ftoggle-count[hidden] { display:none; }
+    .fbar-more { display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:14px;background:#fff;border:1px solid #ece4da; }
+    .fbar-more[hidden] { display:none; }
 
     .pager { display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px 16px;margin-top:14px;font-family:'Inter',sans-serif; }
     .pg-info { font-size:12.5px;color:#8a7560; }
@@ -48,7 +62,7 @@ export const LIST_CSS = `
     .pg-btn:disabled { opacity:.35;cursor:not-allowed; }
     .pg-gap { padding:0 4px;color:#b0a090;font-size:12px; }
     .pg-size { font-size:12.5px;color:#8a7560;display:flex;align-items:center;gap:6px; }
-    @media (prefers-reduced-motion: reduce) { .fchip, .pg-btn { transition:none; } }
+    @media (prefers-reduced-motion: reduce) { .fchip, .pg-btn, .ftoggle { transition:none; } }
   </style>`;
 
 const SEARCH_ICON = `<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>`;
@@ -77,6 +91,20 @@ export function dateRange(label, from, to) {
     <input type="date" class="fdate" data-fdate="from" value="${escHtml(from)}" aria-label="${escHtml(label)} from" />
     <span class="flabel" style="margin:0;">–</span>
     <input type="date" class="fdate" data-fdate="to" value="${escHtml(to)}" aria-label="${escHtml(label)} to" /></div>`;
+}
+
+// "Filters" button that shows/hides the filter rows; the badge counts filters that are on.
+export function filterToggle(count, open) {
+  return `<button type="button" class="ftoggle" data-ftoggle aria-expanded="${open}" aria-controls="fbar-more">
+    <svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z"/></svg>Filters
+    <span class="ftoggle-count" ${count ? '' : 'hidden'}>${count}</span></button>`;
+}
+
+export function updateToggle(root, count) {
+  const badge = root.querySelector('[data-ftoggle] .ftoggle-count');
+  if (!badge) return;
+  badge.hidden = !count;
+  badge.textContent = count;
 }
 
 export function clearButton(activeCount) {
