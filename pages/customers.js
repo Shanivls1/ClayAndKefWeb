@@ -1,5 +1,6 @@
 import { supabase } from '../supabase.js';
-import { escHtml, fmtDate, pgQuote, debounce } from '../utils.js';
+import { escHtml, fmtDate, pgQuote, debounce, phonePattern, looksLikePhone } from '../utils.js';
+import { normalizePhone } from '../whatsapp.js';
 import { logEvent } from '../log.js';
 import { confirmDanger, deleteStyles, ICON_TRASH } from '../confirm.js';
 import { LIST_CSS, searchBox, chipGroup, selectBox, clearButton, wireFilters, activeCount, updateClear, renderPager } from '../listui.js';
@@ -226,7 +227,8 @@ async function loadCustomers(el) {
   let query = supabase
     .from('customer_list')
     .select('id, name, phone, notes, visits, pieces, last_visit, open_orders', { count: 'exact' });
-  if (q) query = query.or(`name.ilike.${pgQuote(`%${q}%`)},phone.ilike.${pgQuote(`%${q}%`)}`);
+  if (q && looksLikePhone(q)) query = query.filter('phone', 'match', phonePattern(q) ?? 'a^'); // any way the number was written
+  else if (q) query = query.or(`name.ilike.${pgQuote(`%${q}%`)},phone.ilike.${pgQuote(`%${q}%`)}`);
   if (filters.kind === 'returning') query = query.gt('pieces', 1);   // returning = more than one piece overall
   if (filters.kind === 'new')       query = query.lte('pieces', 1);
   if (filters.open === 'yes')       query = query.gt('open_orders', 0);
@@ -395,6 +397,11 @@ function wireModal(el, signal) {
 
     if (!name || !phone) {
       errorDiv.textContent = 'Name and phone are required.';
+      errorDiv.style.display = 'block';
+      return;
+    }
+    if (!normalizePhone(phone)) {
+      errorDiv.textContent = 'This phone number can’t be used for WhatsApp. Type it like 050-123-4567 or +972 50-123-4567.';
       errorDiv.style.display = 'block';
       return;
     }

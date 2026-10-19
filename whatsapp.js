@@ -8,11 +8,13 @@ import { fmtNum } from './utils.js';
 const DEFAULT_COUNTRY_CODE = '972';
 const WINDOW_NAME = 'ck-whatsapp'; // every message reuses the same tab
 
-// "050-123-4567" / "+972 50 123 4567" → "972501234567". Returns null if it can't be a valid number.
+// "050-123-4567" / "+972 50 123 4567" / "+972 050-123-4567" → "972501234567". Returns null if it can't be a valid number.
 export function normalizePhone(phone) {
   let digits = String(phone ?? '').replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
   else if (digits.startsWith('0')) digits = DEFAULT_COUNTRY_CODE + digits.slice(1);
+  // "+972 050-…" (country code and the leading 0) — WhatsApp needs it without the 0
+  if (digits.startsWith(DEFAULT_COUNTRY_CODE + '0')) digits = DEFAULT_COUNTRY_CODE + digits.slice(DEFAULT_COUNTRY_CODE.length + 1);
   return digits.length >= 10 && digits.length <= 15 ? digits : null;
 }
 

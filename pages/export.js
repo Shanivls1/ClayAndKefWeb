@@ -233,7 +233,7 @@ export function render() {
             </div>
           </div>
           <div class="export-field-list">
-            ${['Name','Category','Price','Raw Stock','Low Stock Alert','In Progress'].map(f=>`<span class="export-field-tag">${f}</span>`).join('')}
+            ${['Name','Category','Price','Raw Stock','Low Stock Alert','In Progress','Supplier','Cost','Last order','Notes'].map(f=>`<span class="export-field-tag">${f}</span>`).join('')}
           </div>
           <button id="btn-dl-stock" class="export-dl-btn">
             <div class="export-spin" id="btn-dl-stock-spin"></div>
@@ -309,7 +309,7 @@ async function downloadObjects(el) {
 
     const { data, error } = await fetchAllRows(() => supabase
       .from('objects')
-      .select('id, status, container, notes, notified_at, picked_up_at, object_types(name, code), orders!inner(order_number, received_at, customers(name, phone))')
+      .select('id, status, container, notes, notified_at, picked_up_at, original_code, object_types(name, code), orders!inner(order_number, received_at, customers(name, phone))')
       .order('id'));
 
     if (error) throw new Error(error.message);
@@ -324,6 +324,7 @@ async function downloadObjects(el) {
       'Phone':       o.orders?.customers?.phone ?? '',
       'Code':        o.object_types?.code ?? '',
       'Object Type': o.object_types?.name ?? '',
+      'Entered As':  o.original_code ?? '',
       'Status':      STATUS_LABEL[o.status] ?? o.status ?? '',
       'Container':   o.container ?? '',
       'Received':    fmtDate(o.orders?.received_at),
@@ -352,7 +353,7 @@ async function downloadStock(el) {
     const [typesRes, inProgressRes] = await Promise.all([
       supabase
         .from('object_types')
-        .select('id, code, name, category, price, raw_stock, low_stock_alert')
+        .select('id, code, name, category, price, raw_stock, low_stock_alert, supplier, supplier_ref, cost_price, cost_price_ttc, pieces_per_box, boxes_ordered, pieces_ordered, order_total_ht, pieces_received, delivered, notes')
         .order('name'),
       fetchAllRows(() => supabase
         .from('objects')
@@ -374,6 +375,17 @@ async function downloadStock(el) {
       'Raw Stock':        t.raw_stock ?? 0,
       'Low Stock Alert':  t.low_stock_alert ?? '',
       'In Progress':      inProgressCount.get(t.id) ?? 0,
+      'Supplier':         t.supplier ?? '',
+      'Supplier Ref':     t.supplier_ref ?? '',
+      'Cost (₪)':         t.cost_price != null ? Number(t.cost_price) : '',
+      'Cost with VAT (₪)': t.cost_price_ttc != null ? Number(t.cost_price_ttc) : '',
+      'Pieces per Box':   t.pieces_per_box ?? '',
+      'Boxes Ordered':    t.boxes_ordered ?? '',
+      'Pieces Ordered':   t.pieces_ordered ?? '',
+      'Order Total HT (₪)': t.order_total_ht != null ? Number(t.order_total_ht) : '',
+      'Pieces Received':  t.pieces_received ?? '',
+      'Delivered':        t.delivered ?? '',
+      'Notes':            t.notes ?? '',
     }));
 
     const ws = XLSX.utils.json_to_sheet(rows);

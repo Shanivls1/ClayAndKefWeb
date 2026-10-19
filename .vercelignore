@@ -1,0 +1,16 @@
+# Never uploaded to Vercel (vercel.json serves the project folder as the website).
+# Admin database password and the owner's customer / stock data
+.env.db
+*.xlsx
+*.csv
+backups/
+supabase/
+# Local tooling and notes
+.claude/
+.superpowers/
+docs/
+temporary screenshots/
+screenshot.mjs
+serve.mjs
+scripts/import_data1.py
+CLAUDE.md

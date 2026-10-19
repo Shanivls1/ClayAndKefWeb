@@ -59,6 +59,19 @@ export function pgQuote(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+// Phones are stored as typed ("052-1000932", "+972 52-100-0932", "0521000932"…). For a search like "0521000932",
+// a regex for PostgREST's `match` operator that finds the digits whatever is written between them.
+// The leading 0 / 972 is dropped so the local and international ways of writing both match. null if no digits.
+export function phonePattern(query) {
+  let d = String(query ?? '').replace(/\D/g, '');
+  if (d.startsWith('972')) d = d.slice(3);
+  d = d.replace(/^0+/, '');
+  return d ? d.split('').join('\\D*') : null;
+}
+
+// True when a search looks like (part of) a phone number rather than a name.
+export const looksLikePhone = q => /^[\d\s()+-]+$/.test(String(q ?? '').trim()) && /\d/.test(q);
+
 export function debounce(fn, ms) {
   let t;
   return (...args) => {

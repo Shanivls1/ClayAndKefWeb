@@ -59,6 +59,16 @@ The catalog of paintable items the shop sells.
 | price           | decimal | price charged to the customer                                   |
 | raw_stock       | int     | unpainted blanks currently on the shelf                         |
 | low_stock_alert | int     | threshold to highlight low stock in UI                          |
+| supplier, supplier_ref | text | who sells it, and their reference                        |
+| cost_price, cost_price_ttc | numeric | what the shop pays, before / with VAT                |
+| pieces_per_box  | int     |                                                                 |
+| boxes_ordered, pieces_ordered, order_total_ht, pieces_received, delivered | | the last supplier order |
+| notes           | text    |                                                                 |
+
+The catalogue comes from the owner's "Stock Bisques.xlsx" (git-ignored; `migrations/20261016_object_type_details.sql`
+adds the columns). `price` is the customer price ("Prix public"). A type **UNKNOWN** holds past pieces whose code
+wasn't in the catalogue; it isn't offered for new orders. Conflicts and the old-code mapping are listed for the owner
+in "Stock conflicts for the owner.xlsx" (git-ignored). Edited on the Stock page (pencil → Edit).
 
 ### `objects`
 
@@ -73,6 +83,7 @@ One row per individual ceramic piece within an order.
 | notes          | text                | optional notes about this piece        |
 | photo_url      | text                | optional photo stored in Supabase Storage |
 | notified_at    | timestamp           | when the WhatsApp was sent             |
+| original_code  | text                | the code the piece was entered with, when its type was changed to a catalogue code or UNKNOWN (shown as "was …") |
 | container      | text                | where the piece is kept once ready (A–J, Cbis, מחסן שחור…) — chosen when marking ready |
 | picked_up_at   | timestamp           | when the customer collected it         |
 

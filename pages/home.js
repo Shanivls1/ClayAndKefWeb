@@ -4,12 +4,13 @@
 //   • To do — counts that open the Orders page already filtered
 
 import { supabase } from '../supabase.js';
-import { escHtml, fmtNum, todayLocal, fetchAllRows, pgQuote, debounce, countBy } from '../utils.js';
+import { escHtml, fmtNum, todayLocal, fetchAllRows, pgQuote, debounce, countBy, phonePattern, looksLikePhone } from '../utils.js';
 import { logEvent } from '../log.js';
-import { loadSettings, settings } from '../settings.js';
+import { loadSettings, settings, DEFAULTS as SETTING_DEFAULTS } from '../settings.js';
 import { normalizePhone } from '../whatsapp.js';
 import { createOrder } from '../neworder.js';
 import { refreshRemindBadge } from '../navbadge.js';
+import { orderLines, totalHtml, isOpen } from '../ordertotal.js';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -209,6 +210,7 @@ export function render() {
               </div>
               <div class="hm-list" id="hm-type-list" role="listbox" hidden></div>
               <div class="hm-items" id="hm-items"></div>
+              <div id="hm-total" aria-live="polite"></div>
             </div>
 
             <div class="hm-step" id="hm-step-extra">
@@ -269,7 +271,7 @@ export async function mount(el, signal) {
   await loadSettings();
   const [custRes, typeRes] = await Promise.all([
     fetchAllRows(() => supabase.from('customers').select('id, name, phone').order('id')),
-    fetchAllRows(() => supabase.from('object_types').select('id, code, name, raw_stock').order('id')),
+    fetchAllRows(() => supabase.from('object_types').select('id, code, name, raw_stock, price').order('id')),
   ]);
   if (signal.aborted) return;
   if (custRes.error || typeRes.error) {
@@ -278,7 +280,7 @@ export async function mount(el, signal) {
     showError(`Couldn't load customers or object types (${msg}). Refresh the page to try again.`);
   }
   customers = (custRes.data ?? []).map(c => ({ ...c, digits: digitsOf(c.phone) }));
-  types = (typeRes.data ?? []).sort((a, b) => String(a.code ?? a.name).localeCompare(String(b.code ?? b.name), undefined, { numeric: true }));
+  types = (typeRes.data ?? []).filter(t => t.code !== 'UNKNOWN').sort((a, b) => String(a.code ?? a.name).localeCompare(String(b.code ?? b.name), undefined, { numeric: true }));
   renderCustomer(true);
   loadQuickTypes();
   loadTodo();
@@ -541,6 +543,8 @@ function renderPieces(focusSel) {
     </div>`;
   }).join('');
   pageEl.querySelector('#hm-step-pieces').classList.toggle('done', pieces.length > 0);
+  const totalBox = pageEl.querySelector('#hm-total');
+  totalBox.innerHTML = totalHtml(orderLines(pieceTypeIds(), types), { open: isOpen(totalBox) });
   renderQuick();
   updateCreate();
   if (focusSel) pageEl.querySelector(focusSel)?.focus();
@@ -549,6 +553,7 @@ function renderPieces(focusSel) {
 // ─── Create ───────────────────────────────────────────────────────────────────
 
 const pieceCount = () => pieces.reduce((n, p) => n + p.qty, 0);
+const pieceTypeIds = () => pieces.flatMap(p => Array(p.qty).fill(p.typeId));
 
 function updateCreate() {
   const go = pageEl.querySelector('#hm-go');
@@ -628,6 +633,7 @@ function showDone(order, warnings) {
     <div class="hm-done" role="status">
       <div class="hm-big" id="hm-done-num">${escHtml(num)}</div>
       <div class="for"><strong>${escHtml(customer.name)}</strong> · ${n} piece${n === 1 ? '' : 's'}: ${escHtml(summary)}</div>
+      ${totalHtml(orderLines(pieceTypeIds(), types), { done: true })}
       ${warnings.length ? `<div class="hm-note warn" style="max-width:520px;margin:14px auto 0;">${escHtml(warnings.join(' '))}</div>` : ''}
       <div class="actions">
         <button type="button" class="hm-go" id="hm-again">${I_PLUS} Next order</button>
@@ -681,7 +687,7 @@ async function searchCollect(raw) {
     .in('stage', ['ready', 'waiting']);
   const num = q.replace(/^#/, '');
   if (/^\d{1,4}$/.test(num))      query = query.eq('order_number', Number(num));
-  else if (/^[\d\s+-]+$/.test(q)) query = query.ilike('customer_phone', `%${q.replace(/\D/g, '').replace(/^0/, '')}%`);
+  else if (looksLikePhone(q))     query = query.filter('customer_phone', 'match', phonePattern(q) ?? 'a^');
   else                            query = query.or(`customer_name.ilike.${pgQuote(`%${q}%`)},customer_phone.ilike.${pgQuote(`%${q}%`)}`);
   const { data, error } = await query.order('received_at', { ascending: false }).limit(6);
   if (seq !== colSeq || pageSignal?.aborted) return;
@@ -703,7 +709,7 @@ function drawCollect() {
   list.innerHTML = colRows.map(o => {
     const id = escHtml(o.id);
     const ready = Number(o.ready ?? 0), waiting = Number(o.waiting ?? 0);
-    const boxes = String(o.containers ?? '').trim().split(/\s+/).filter(Boolean);
+    const boxes = splitContainers(o.containers);
     if (collected.has(o.id)) {
       const n = collected.get(o.id).length;
       return `<div class="hm-ord collected">
@@ -719,6 +725,18 @@ function drawCollect() {
       ${ready ? `<button type="button" class="hm-collect" data-collect="${id}">${I_BAG} Collect ${ready > 1 ? `all ${ready}` : ''}</button>` : '<span class="wait">Not ready yet</span>'}
       <span class="st">${parts.join(' · ')} · came in ${escHtml(new Date(o.received_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }))}</span></div>`;
   }).join('');
+}
+
+// order_list.containers is space-separated (" F מחסן שחור "), and some names have a space in them:
+// take the known names out whole first (longest first), then whatever is left word by word.
+function splitContainers(text) {
+  let rest = ` ${String(text ?? '').trim()} `;
+  const found = [];
+  const known = [...new Set([...(settings().containers ?? []), ...SETTING_DEFAULTS.containers])].filter(c => /\s/.test(c)).sort((a, b) => b.length - a.length);
+  for (const c of known) {
+    if (rest.includes(` ${c} `)) { found.push(c); rest = rest.replace(` ${c} `, ' '); }
+  }
+  return [...found, ...rest.trim().split(/\s+/).filter(Boolean)].sort((a, b) => a.localeCompare(b));
 }
 
 async function collectOrder(orderId) {

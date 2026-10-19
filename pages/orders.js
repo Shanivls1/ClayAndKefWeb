@@ -1,13 +1,14 @@
 import { supabase } from '../supabase.js';
 import { initCombobox } from '../combobox.js';
-import { escHtml, fmtNum, fmtDate, todayLocal, countBy, debounce, fetchAllRows, pgQuote } from '../utils.js';
+import { escHtml, fmtNum, fmtDate, todayLocal, countBy, debounce, fetchAllRows, pgQuote, phonePattern, looksLikePhone } from '../utils.js';
 import { LIST_CSS, searchBox, chipGroup, selectBox, dateRange, clearButton, wireFilters as wireFilterControls,
          activeCount, updateClear, renderPager, filterToggle, updateToggle } from '../listui.js';
-import { buildReadyMessage, openWhatsApp } from '../whatsapp.js';
+import { buildReadyMessage, openWhatsApp, normalizePhone } from '../whatsapp.js';
 import { logEvent } from '../log.js';
 import { confirmDanger, deleteStyles, ICON_TRASH } from '../confirm.js';
 import { setRemindBadge } from '../navbadge.js';
 import { createOrder } from '../neworder.js';
+import { orderLines, totalHtml, isOpen } from '../ordertotal.js';
 import { loadSettings, settings, DEFAULTS as SETTING_DEFAULTS } from '../settings.js';
 
 // ─── Status config ─────────────────────────────────────────────────────────────
@@ -155,7 +156,8 @@ export function render() {
       .tip:focus-visible::after, .tip:focus-visible::before { opacity:1;transform:translate(-50%,0); }
       @media (prefers-reduced-motion: reduce) { .tip::after, .tip::before { transition:none; } }
       .pc-name { display:flex;align-items:center;gap:8px;min-width:0; }
-      .pc-name span:last-child { font-family:'Inter',sans-serif;font-size:14px;font-weight:600;color:#1a120b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+      .pc-name > span:not(.pc-code) { font-family:'Inter',sans-serif;font-size:14px;font-weight:600;color:#1a120b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+      .pc-was { flex-shrink:0;font-family:'Inter',sans-serif;font-size:11.5px;color:#a09080;font-weight:500; }
       .pc-code { flex-shrink:0;font-family:'Inter',sans-serif;font-size:10px;font-weight:700;letter-spacing:0.06em;color:#9C1A4D;background:rgba(156,26,77,0.08);padding:2px 6px;border-radius:4px; }
       .pc-link { background:none;border:none;padding:0 2px;cursor:pointer;font:inherit;font-weight:600;color:#9C1A4D;text-decoration:underline;text-underline-offset:2px;border-radius:3px; }
       .pc-link:hover { color:#7D1540; }
@@ -453,6 +455,7 @@ export function render() {
             font-family:'Caveat',cursive;font-size:60px;font-weight:700;
             color:#9C1A4D;line-height:1.1;margin-bottom:24px;letter-spacing:-0.01em;
           "></div>
+          <div id="ord-success-total" style="margin:-8px 0 20px;"></div>
           <div id="ord-success-warning" style="display:none;font-family:'Inter',sans-serif;font-size:13px;color:#b45309;
             background:rgba(217,119,6,0.08);border-radius:8px;padding:10px 12px;margin-bottom:20px;line-height:1.5;"></div>
           <div style="display:flex;gap:10px;justify-content:center;">
@@ -548,6 +551,7 @@ export function render() {
               onmouseover="this.style.borderColor='#9C1A4D';this.style.color='#9C1A4D';this.style.background='rgba(156,26,77,0.03)'"
               onmouseout="this.style.borderColor='#d0c8bf';this.style.color='#8a7560';this.style.background='none'"
             >+ Add another object</button>
+            <div id="ord-total" aria-live="polite"></div>
           </div>
 
           <div style="margin-bottom:24px;">
@@ -640,10 +644,10 @@ export async function mount(el, signal) {
 async function loadObjectTypes() {
   const { data, error } = await supabase
     .from('object_types')
-    .select('id, name, code, raw_stock')
+    .select('id, name, code, raw_stock, price')
     .order('name');
   if (error) logEvent('error', `Couldn't load object types for orders: ${error.message}`);
-  allObjectTypes = data ?? [];
+  allObjectTypes = (data ?? []).filter(t => t.code !== 'UNKNOWN'); // only for old pieces whose code isn't in the catalogue
 }
 
 async function loadCustomers() {
@@ -670,7 +674,7 @@ async function loadOrders(el) {
     const like = pgQuote(`%${q}%`);
     // 1–4 digits (optionally "#12") = order number; longer digit strings = part of a phone number
     if (/^\d{1,4}$/.test(num))      query = query.eq('order_number', Number(num));
-    else if (/^[\d\s-]+$/.test(q)) query = query.ilike('customer_phone', `%${q.replace(/\D/g, '')}%`);
+    else if (looksLikePhone(q))    query = query.filter('customer_phone', 'match', phonePattern(q) ?? 'a^');
     else                            query = query.or(`customer_name.ilike.${like},customer_phone.ilike.${like}`);
   }
   if (filters.stage !== 'all')             query = query.eq('stage', filters.stage);
@@ -698,7 +702,7 @@ async function loadOrders(el) {
       .from('orders')
       .select(`id, order_number, received_at, notes, reminder1_at, reminder2_at,
                customers(id, name, phone),
-               objects(id, status, notified_at, picked_up_at, container, object_types(id, name, code))`)
+               objects(id, status, notified_at, picked_up_at, container, original_code, object_types(id, name, code))`)
       .in('id', page.map(r => r.id));
     if (seq !== loadSeq || pageSignal?.aborted) return;
     error = res.error;
@@ -1029,7 +1033,8 @@ function buildItemRow(item) {
   return `
     <div class="pc-card${item.status === 'picked_up' ? ' is-done' : ''}">
       <div style="min-width:0;">
-        <div class="pc-name">${code ? `<span class="pc-code">${escHtml(code)}</span>` : ''}<span>${escHtml(name)}</span></div>
+        <div class="pc-name">${code ? `<span class="pc-code">${escHtml(code)}</span>` : ''}<span>${escHtml(name)}</span>${
+          item.original_code && item.original_code !== code ? `<small class="pc-was" title="Code it was entered with">was ${escHtml(item.original_code)}</small>` : ''}</div>
         ${item.status === 'ready' ? (item.container
           ? `<button type="button" class="pc-box" data-object-id="${id}" title="Move to another container">${ICON_BOX}In <b>${escHtml(item.container)}</b></button>`
           : `<button type="button" class="pc-box none" data-object-id="${id}">${ICON_BOX}No container — set</button>`) : ''}
@@ -1161,7 +1166,13 @@ async function moveToContainer(el, items, container) {
       items.forEach((i, n) => { i.container = before[n]; });
       renderOrders(el, allOrders);
       for (const prev of new Set(before)) {
-        await supabase.from('objects').update({ container: prev }).in('id', items.filter((_, n) => before[n] === prev).map(i => i.id));
+        const { error: undoError } = await supabase.from('objects').update({ container: prev }).in('id', items.filter((_, n) => before[n] === prev).map(i => i.id));
+        if (undoError) {
+          logEvent('error', `Couldn't undo the container move: ${undoError.message}`);
+          showToast(el, { html: `Couldn't undo — ${escHtml(undoError.message)}`, tone: 'error' });
+          if (!pageSignal?.aborted) loadOrders(el);
+          return;
+        }
       }
     } }] });
 }
@@ -1235,11 +1246,19 @@ async function changeStatus(el, items, newStatus, { isUndo = false, container } 
   items.forEach(i => { savingIds.add(i.id); Object.assign(i, payload); });
   renderOrders(el, allOrders);
 
-  const { error } = await supabase.from('objects').update(payload).in('id', items.map(i => i.id));
+  // Only pieces still in the status this page showed: if one was changed elsewhere meanwhile (another device,
+  // Home → Collect), it isn't moved back.
+  const { data: saved, error } = await supabase.from('objects').update(payload)
+    .in('id', items.map(i => i.id)).eq('status', before[0].status).select('id');
 
   items.forEach(i => savingIds.delete(i.id));
   if (error) items.forEach((i, n) => Object.assign(i, before[n]));
   if (pageSignal?.aborted) return;
+  if (!error && (saved?.length ?? 0) < items.length) {
+    showToast(el, { html: 'Some of these pieces were changed somewhere else in the meantime — the list is up to date now.', tone: 'error' });
+    loadOrders(el);
+    return;
+  }
   renderOrders(el, allOrders);
 
   const order = findOrderOf(items[0].id);
@@ -1452,11 +1471,18 @@ async function loadPendingWa(el) {
   const opened = [...latest].filter(([, e]) => e.details.kind === 'wa_opened');
   if (!opened.length) return;
 
-  const { data: pieces } = await supabase
+  // In batches: hundreds of order ids in one request make the address too long and the server refuses it
+  const ids = opened.map(([id]) => id);
+  const batches = [];
+  for (let i = 0; i < ids.length; i += 50) batches.push(ids.slice(i, i + 50));
+  const results = await Promise.all(batches.map(b => supabase
     .from('objects')
     .select('id, order_id, status, notified_at, orders(order_number, reminder1_at, reminder2_at, customers(name, phone))')
-    .in('order_id', opened.map(([id]) => id));
+    .in('order_id', b)));
   if (pageSignal?.aborted) return;
+  const failed = results.find(r => r.error);
+  if (failed) logEvent('warning', `Couldn't check which WhatsApp chats are still unanswered: ${failed.error.message}`);
+  const pieces = results.flatMap(r => r.data ?? []);
 
   for (const [orderId, e] of opened) {
     if (pendingWa.has(orderId)) continue;
@@ -1816,8 +1842,10 @@ function renderModalItems(form) {
   container.querySelectorAll('.modal-item-type').forEach(sel => {
     sel.addEventListener('change', () => {
       modalItemTypes[parseInt(sel.dataset.itemIdx)] = sel.value;
+      renderModalTotal(form);
     });
   });
+  renderModalTotal(form);
 
   // wire remove buttons
   container.querySelectorAll('.remove-item-btn').forEach(btn => {
@@ -1826,6 +1854,12 @@ function renderModalItems(form) {
       renderModalItems(form);
     });
   });
+}
+
+// "Total to pay" under the pieces of the New order dialog
+function renderModalTotal(form) {
+  const box = form.querySelector('#ord-total');
+  if (box) box.innerHTML = totalHtml(orderLines(modalItemTypes, allObjectTypes), { open: isOpen(box) });
 }
 
 function wireModal(el, signal) {
@@ -1859,7 +1893,7 @@ function wireModal(el, signal) {
     allCustomers.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.id;
-      opt.textContent = c.name;
+      opt.textContent = customerLabel(c);
       customerSel.appendChild(opt);
     });
 
@@ -1944,6 +1978,7 @@ function wireModal(el, signal) {
 
     // 4. Show the order number — it's what gets written on every piece
     el.querySelector('#ord-success-numbers').textContent = fmtNum(newOrder.order_number);
+    el.querySelector('#ord-success-total').innerHTML = totalHtml(orderLines(selectedTypes, allObjectTypes), { done: true });
     const warnEl = el.querySelector('#ord-success-warning');
     warnEl.textContent = stockWarnings.join(' ');
     warnEl.style.display = stockWarnings.length ? 'block' : 'none';
@@ -1957,6 +1992,9 @@ function wireModal(el, signal) {
 
   wireNewCustomer(el, form, cbCustomer);
 }
+
+// The customer picker shows the phone too: several customers can have the same name
+const customerLabel = c => (c.phone ? `${c.name} · ${c.phone}` : c.name);
 
 // ─── New customer inline form ─────────────────────────────────────────────────
 
@@ -1994,8 +2032,8 @@ function wireNewCustomer(el, form, cbCustomer) {
   function checkDupe(phone) {
     dupeNotice.style.display = 'none';
     if (!phone) return;
-    const digits = p => String(p ?? '').replace(/\D/g, '');
-    const found = allCustomers.find(c => digits(c.phone) === digits(phone));
+    const n = normalizePhone(phone);
+    const found = n && allCustomers.find(c => normalizePhone(c.phone) === n);
     if (!found) return;
 
     dupeText.innerHTML = `A customer with this number already exists: <strong>${escHtml(found.name)}</strong>.`;
@@ -2027,6 +2065,11 @@ function wireNewCustomer(el, form, cbCustomer) {
       errorDiv.style.display = 'block';
       return;
     }
+    if (!normalizePhone(phone)) {
+      errorDiv.textContent = 'This phone number can’t be used for WhatsApp. Type it like 050-123-4567 or +972 50-123-4567.';
+      errorDiv.style.display = 'block';
+      return;
+    }
 
     errorDiv.style.display = 'none';
     createBtn.disabled = true;
@@ -2055,7 +2098,7 @@ function wireNewCustomer(el, form, cbCustomer) {
     allCustomers.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.id;
-      opt.textContent = c.name;
+      opt.textContent = customerLabel(c);
       customerSel.appendChild(opt);
     });
     cbCustomer.refresh();

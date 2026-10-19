@@ -11,7 +11,7 @@ let stockErrors = new Map();
 let savingIds = new Set();
 let editing   = null;       // { id, mode: 'add' | 'remove' } — the card whose amount box is open
 let stockNotes = new Map(); // typeId → short success note ("Added 5"), cleared after a moment
-const DEFAULTS = { q: '', category: '', level: 'all', sort: 'name' };
+const DEFAULTS = { q: '', category: '', supplier: '', level: 'all', sort: 'name' };
 let filters     = { ...DEFAULTS };
 let currentPage = 1;
 let pageSize    = 25;
@@ -28,6 +28,17 @@ const isLow = t => t.low_stock_alert != null && t.raw_stock <= t.low_stock_alert
 function formatPrice(price) {
   return `₪${Number(price ?? 0).toFixed(0)}`;
 }
+
+const money = v => v == null || v === '' ? '' : `₪${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+// "Cost ₪10 · ₪11.80 with VAT · Yossi"
+function buyingLine(t) {
+  const parts = [];
+  if (t.cost_price != null) parts.push(`Cost ${money(t.cost_price)}`);
+  if (t.cost_price_ttc != null) parts.push(`${money(t.cost_price_ttc)} with VAT`);
+  if (t.supplier) parts.push(escHtml(t.supplier));
+  return parts.join(' · ');
+}
+const ICON_EDIT = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
 
 function skeletonCards() {
   return Array(6).fill(null).map(() => `
@@ -106,6 +117,32 @@ export function render() {
       .adj-ok { color:#2f8a4a; }
       .adj-ok:not(:disabled):hover { background:#2f8a4a !important;border-color:#2f8a4a !important;color:#fff; }
       .stock-note { font-family:'Inter',sans-serif;font-size:12px;color:#2f8a4a; }
+      .ed-backdrop { position:fixed;inset:0;z-index:120;background:rgba(26,18,11,.4);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px; }
+      .ed-backdrop[hidden] { display:none; }
+      .ed-box { position:relative;width:100%;max-width:620px;background:#fff;border-radius:16px;padding:28px;box-shadow:0 2px 6px rgba(45,31,20,.1),0 18px 48px rgba(45,31,20,.2);font-family:'Inter',sans-serif; }
+      .ed-box h2 { font-size:19px;font-weight:700;color:#1a120b;margin-bottom:18px;padding-right:32px; }
+      .ed-close { position:absolute;top:16px;right:16px;width:32px;height:32px;border:none;border-radius:8px;background:none;cursor:pointer;font-size:20px;color:#8a7560; }
+      .ed-close:hover { background:#f3ede6; }
+      .ed-close:focus-visible { outline:2px solid #9C1A4D; }
+      .ed-box fieldset { border:none;border-top:1px solid #f1ebe4;padding:14px 0 6px;margin:0; }
+      .ed-box legend { font-size:12px;font-weight:700;color:#9C1A4D;padding-right:8px; }
+      .ed-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px 12px; }
+      .ed-grid .wide { grid-column:1 / -1; }
+      .ed-box label { display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:#8a7560; }
+      .ed-box input, .ed-box textarea { height:40px;padding:0 12px;border:1px solid #e6dfd6;border-radius:9px;font:400 14px 'Inter',sans-serif;color:#1a120b;outline:none;background:#fff; }
+      .ed-box textarea { height:auto;padding:9px 12px;resize:vertical;line-height:1.5; }
+      .ed-box input:focus, .ed-box textarea:focus { border-color:#9C1A4D;box-shadow:0 0 0 3px rgba(156,26,77,.1); }
+      .ed-notes { margin-top:12px; }
+      .ed-error { margin-top:12px;font-size:13px;color:#b3261e; }
+      .ed-actions { display:flex;justify-content:flex-end;gap:10px;margin-top:20px; }
+      .ed-cancel, .ed-save { height:42px;padding:0 18px;border-radius:10px;font:600 14px 'Inter',sans-serif;cursor:pointer;transition:transform .15s cubic-bezier(.34,1.56,.64,1); }
+      .ed-cancel { background:#fff;border:1px solid #e0d8cf;color:#5a4a3a;font-weight:500; }
+      .ed-cancel:hover { background:#f7f2ec; }
+      .ed-save { background:#9C1A4D;border:none;color:#fff;box-shadow:0 2px 8px rgba(156,26,77,.25); }
+      .ed-save:hover:not(:disabled) { background:#7D1540; }
+      .ed-save:disabled { opacity:.6;cursor:wait; }
+      .ed-cancel:active, .ed-save:active { transform:scale(.97); }
+      .ed-cancel:focus-visible, .ed-save:focus-visible { outline:2px solid #9C1A4D;outline-offset:2px; }
       #add-type-form input { box-sizing: border-box; }
     </style>
 
@@ -148,6 +185,49 @@ export function render() {
       </div>
       <div id="stock-pagination"></div>
 
+    </div>
+
+    <div id="edit-backdrop" class="ed-backdrop" hidden>
+      <div class="ed-box" role="dialog" aria-modal="true" aria-labelledby="ed-title">
+        <button type="button" class="ed-close" id="ed-close" aria-label="Close">×</button>
+        <h2 id="ed-title"></h2>
+        <form id="ed-form" autocomplete="off" novalidate>
+          <fieldset><legend>Selling</legend>
+            <div class="ed-grid">
+              <label class="wide">Name<input name="name" required maxlength="120" /></label>
+              <label>Code<input name="code" required maxlength="20" style="text-transform:uppercase;letter-spacing:.04em;" /></label>
+              <label>Customer price (₪)<input name="price" type="number" min="0" step="0.01" /></label>
+              <label>Category<input name="category" maxlength="60" /></label>
+              <label>Low stock alert<input name="low_stock_alert" type="number" min="0" step="1" /></label>
+            </div>
+          </fieldset>
+          <fieldset><legend>Buying</legend>
+            <div class="ed-grid">
+              <label>Supplier<input name="supplier" list="ed-suppliers" maxlength="60" /></label>
+              <label>Supplier ref.<input name="supplier_ref" maxlength="60" /></label>
+              <label>Cost before VAT (₪)<input name="cost_price" type="number" min="0" step="0.01" /></label>
+              <label>Cost with VAT (₪)<input name="cost_price_ttc" type="number" min="0" step="0.01" /></label>
+              <label>Pieces per box<input name="pieces_per_box" type="number" min="0" step="1" /></label>
+            </div>
+            <datalist id="ed-suppliers"></datalist>
+          </fieldset>
+          <fieldset><legend>Last order</legend>
+            <div class="ed-grid">
+              <label>Boxes ordered<input name="boxes_ordered" type="number" min="0" step="1" /></label>
+              <label>Pieces ordered<input name="pieces_ordered" type="number" min="0" step="1" /></label>
+              <label>Total before VAT (₪)<input name="order_total_ht" type="number" min="0" step="0.01" /></label>
+              <label>Pieces received<input name="pieces_received" type="number" min="0" step="1" /></label>
+              <label>Delivered<input name="delivered" maxlength="30" placeholder="e.g. Feb 2025" /></label>
+            </div>
+          </fieldset>
+          <label class="ed-notes">Notes<textarea name="notes" rows="2" maxlength="1000"></textarea></label>
+          <div class="ed-error" id="ed-error" role="alert" hidden></div>
+          <div class="ed-actions">
+            <button type="button" class="ed-cancel" id="ed-cancel">Cancel</button>
+            <button type="submit" class="ed-save" id="ed-save">Save</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <div id="type-modal-backdrop" style="
@@ -280,6 +360,7 @@ export async function mount(el, signal) {
   filters     = { ...DEFAULTS };
   currentPage = 1;
   wireModal(el, signal);
+  wireEdit(el, signal);
 
   const error = await loadStock();
   if (signal.aborted) return;
@@ -304,6 +385,7 @@ async function loadStock() {
     fetchAllRows(() => supabase.from('objects').select('object_type_id').eq('status', 'received')),
   ]);
   if (typesResult.error) return typesResult.error;
+  if (progressResult.error) return progressResult.error; // otherwise every "In progress" would wrongly show 0
   allTypes = typesResult.data ?? [];
   inProgressMap = countBy(progressResult.data ?? [], r => r.object_type_id);
   return null;
@@ -326,8 +408,9 @@ function renderCards(el) {
 
   const q = filters.q.toLowerCase().trim();
   const filtered = allTypes.filter(t =>
-    (!q || [t.name, t.code, t.category].some(v => String(v ?? '').toLowerCase().includes(q))) &&
+    (!q || [t.name, t.code, t.category, t.supplier, t.supplier_ref].some(v => String(v ?? '').toLowerCase().includes(q))) &&
     (filters.category === '' || (filters.category === '__none' ? !t.category : t.category === filters.category)) &&
+    (filters.supplier === '' || (filters.supplier === '__none' ? !t.supplier : t.supplier === filters.supplier)) &&
     (filters.level === 'all' ||
       (filters.level === 'low' && isLow(t)) ||
       (filters.level === 'out' && (t.raw_stock ?? 0) <= 0) ||
@@ -390,14 +473,19 @@ function buildCard(t) {
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;">
           <div style="font-family:'Inter',sans-serif;font-size:18px;font-weight:700;color:#1a120b;">${escHtml(t.name)}</div>
           ${t.code && t.code !== t.name ? `<span style="font-family:'Inter',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.08em;color:#9C1A4D;background:rgba(156,26,77,0.08);padding:2px 7px;border-radius:4px;">${escHtml(t.code)}</span>` : ''}
-          <button type="button" class="del-btn type-del" data-id="${escHtml(t.id)}" style="margin-left:auto;align-self:center;"
-            title="Delete this object type" aria-label="Delete ${escHtml(t.code || t.name)}">${ICON_TRASH}</button>
+          <span style="margin-left:auto;display:inline-flex;gap:2px;align-self:center;">
+            <button type="button" class="del-btn type-edit" data-id="${escHtml(t.id)}"
+              title="Edit details" aria-label="Edit ${escHtml(t.code || t.name)}">${ICON_EDIT}</button>
+            <button type="button" class="del-btn type-del" data-id="${escHtml(t.id)}"
+              title="Delete this object type" aria-label="Delete ${escHtml(t.code || t.name)}">${ICON_TRASH}</button>
+          </span>
         </div>
         ${pill}
       </div>
 
       <div style="font-family:'Inter',sans-serif;font-size:22px;font-weight:600;
-        color:#9C1A4D;margin:14px 0 18px;">${formatPrice(t.price)}</div>
+        color:#9C1A4D;margin:14px 0 ${buyingLine(t) ? '4px' : '18px'};">${formatPrice(t.price)}</div>
+      ${buyingLine(t) ? `<div style="font-family:'Inter',sans-serif;font-size:12.5px;color:#8a7560;margin-bottom:16px;">${buyingLine(t)}</div>` : ''}
 
       <div style="display:flex;flex-direction:column;gap:12px;">
 
@@ -465,6 +553,8 @@ function wireStockButtons(el) {
     btn.addEventListener('click', () => open(btn.dataset.id, 'set')));
   el.querySelectorAll('.type-del').forEach(btn =>
     btn.addEventListener('click', () => deleteType(el, btn.dataset.id)));
+  el.querySelectorAll('.type-edit').forEach(btn =>
+    btn.addEventListener('click', () => openEdit(el, btn.dataset.id)));
 
   const form = el.querySelector('.adj-form');
   if (!form) return;
@@ -603,18 +693,102 @@ async function deleteType(el, id) {
   renderCards(el);
 }
 
+// ─── Edit details ─────────────────────────────────────────────────────────────
+
+const EDIT_TEXT = ['name', 'code', 'category', 'supplier', 'supplier_ref', 'delivered', 'notes'];
+const EDIT_NUM  = ['price', 'cost_price', 'cost_price_ttc', 'order_total_ht'];
+const EDIT_INT  = ['low_stock_alert', 'pieces_per_box', 'boxes_ordered', 'pieces_ordered', 'pieces_received'];
+let editId = null;
+
+function openEdit(el, id) {
+  const t = allTypes.find(x => x.id === id);
+  if (!t) return;
+  editId = id;
+  const form = el.querySelector('#ed-form');
+  el.querySelector('#ed-title').textContent = `Edit ${t.code || t.name}`;
+  for (const f of [...EDIT_TEXT, ...EDIT_NUM, ...EDIT_INT]) form.elements[f].value = t[f] ?? '';
+  el.querySelector('#ed-suppliers').innerHTML = [...new Set(allTypes.map(x => x.supplier).filter(Boolean))].sort()
+    .map(s => `<option value="${escHtml(s)}"></option>`).join('');
+  el.querySelector('#ed-error').hidden = true;
+  el.querySelector('#edit-backdrop').hidden = false;
+  form.elements.name.focus();
+}
+
+function closeEdit(el) {
+  editId = null;
+  el.querySelector('#edit-backdrop').hidden = true;
+  el.querySelector(`.type-edit[data-id]`)?.blur();
+}
+
+function wireEdit(el, signal) {
+  const backdrop = el.querySelector('#edit-backdrop');
+  const form = el.querySelector('#ed-form');
+  const error = el.querySelector('#ed-error');
+  const save = el.querySelector('#ed-save');
+  el.querySelector('#ed-close').addEventListener('click', () => closeEdit(el));
+  el.querySelector('#ed-cancel').addEventListener('click', () => closeEdit(el));
+  backdrop.addEventListener('click', e => { if (e.target === backdrop) closeEdit(el); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && editId) closeEdit(el); }, { signal });
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const t = allTypes.find(x => x.id === editId);
+    if (!t) return;
+    const say = text => { error.textContent = text; error.hidden = !text; };
+    const patch = {};
+    for (const f of EDIT_TEXT) { const v = form.elements[f].value.trim(); patch[f] = v === '' ? null : v; }
+    patch.code = patch.code?.toUpperCase() ?? null;
+    for (const f of [...EDIT_NUM, ...EDIT_INT]) {
+      const raw = form.elements[f].value.trim();
+      if (raw === '') { patch[f] = null; continue; }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0 || (EDIT_INT.includes(f) && !Number.isInteger(n))) {
+        say(`“${form.elements[f].closest('label').firstChild.textContent.trim()}” must be ${EDIT_INT.includes(f) ? 'a whole number' : 'a number'}, 0 or more.`);
+        form.elements[f].focus();
+        return;
+      }
+      patch[f] = n;
+    }
+    if (!patch.name || !patch.code) { say('Name and code are needed.'); return; }
+    if (allTypes.some(x => x.id !== t.id && String(x.code ?? '').toUpperCase() === patch.code)) {
+      say(`${patch.code} is already used by another object type.`); form.elements.code.focus(); return;
+    }
+    if (patch.price == null) patch.price = 0;
+    save.disabled = true; save.textContent = 'Saving…'; say('');
+    const { error: upError } = await supabase.from('object_types').update(patch).eq('id', t.id);
+    save.disabled = false; save.textContent = 'Save';
+    if (signal.aborted) return;
+    if (upError) {
+      logEvent('error', `Couldn't save ${t.code}: ${upError.message}`);
+      say(`Couldn't save — ${upError.message}`);
+      return;
+    }
+    Object.assign(t, patch);
+    closeEdit(el);
+    const note = new String('Details saved');
+    stockNotes.set(t.id, note);
+    setTimeout(() => { if (stockNotes.get(t.id) === note) { stockNotes.delete(t.id); if (!editing) renderCards(el); } }, 2500);
+    renderFilters(el);
+    renderCards(el);
+  });
+}
+
 function renderFilters(el) {
   const box = el.querySelector('#stock-filters');
   const cats = [...new Set(allTypes.map(t => t.category).filter(Boolean))].sort();
   const catOptions = [['', 'All categories'], ...cats.map(c => [c, c]),
     ...(allTypes.some(t => !t.category) ? [['__none', 'No category']] : [])];
+  const sups = [...new Set(allTypes.map(t => t.supplier).filter(Boolean))].sort();
+  const supOptions = [['', 'All suppliers'], ...sups.map(c => [c, c]),
+    ...(allTypes.some(t => !t.supplier) ? [['__none', 'No supplier']] : [])];
   box.innerHTML = `
     <div class="fbar-row">
-      ${searchBox('stock-search', 'Search by name, code, or category…', filters.q)}
+      ${searchBox('stock-search', 'Search by name, code, supplier…', filters.q)}
       ${selectBox('sort', 'Sort', Object.entries(SORTS).map(([k, v]) => [k, v.label]), filters.sort)}
     </div>
     <div class="fbar-row">
       ${chipGroup('level', 'Show', [['all', 'All'], ['low', 'Low stock'], ['out', 'Out of stock'], ['progress', 'In progress']], filters.level)}
+      ${sups.length ? selectBox('supplier', 'Supplier', supOptions, filters.supplier) : ''}
       ${cats.length ? selectBox('category', 'Category', catOptions, filters.category) : ''}
       ${clearButton(activeCount(filters, DEFAULTS))}
     </div>`;
@@ -671,6 +845,13 @@ function wireModal(el, signal) {
     if (price < 0 || raw_stock < 0 || low_stock_alert < 0) {
       errorDiv.textContent = 'Price, stock, and alert threshold must be 0 or greater.';
       errorDiv.style.display = 'block';
+      return;
+    }
+    const taken = allTypes.find(t => String(t.code ?? '').toUpperCase() === code);
+    if (taken) {
+      errorDiv.textContent = `${code} is already used by ${taken.name}. Each code can only be used once.`;
+      errorDiv.style.display = 'block';
+      form.elements.code.focus();
       return;
     }
 
