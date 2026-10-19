@@ -3,8 +3,6 @@
 // Everything WhatsApp-specific lives here, so switching to an automated sender later
 // only means replacing this file.
 
-import { fmtNum } from './utils.js';
-
 const DEFAULT_COUNTRY_CODE = '972';
 const WINDOW_NAME = 'ck-whatsapp'; // every message reuses the same tab
 
@@ -39,7 +37,7 @@ export function buildReadyMessage(template, customerName, orderNumber, pieceName
   for (const name of pieceNames) counts.set(name, (counts.get(name) ?? 0) + 1);
   const values = {
     '{name}':   String(customerName ?? '').trim().split(/\s+/)[0] || '',
-    '{order}':  fmtNum(orderNumber),
+    '{order}':  orderNumber != null ? String(orderNumber).padStart(3, '0') : '', // "012", no # (as written on the pieces)
     '{pieces}': [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', '),
     '{count}':  String(pieceNames.length),
   };

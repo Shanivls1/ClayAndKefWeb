@@ -45,7 +45,7 @@ One row per customer visit. A single order groups all objects a customer leaves 
 | order_number | int       | 1–1000, then starts again at 1 (trigger `set_order_number`); skips numbers whose order still has uncollected pieces. **Not unique** over time — sort by `received_at`, identify by `id` |
 | customer_id  | uuid FK → customers |                       |
 | received_at  | timestamp | when the customer came in          |
-| notes        | text      | optional order-level notes         |
+| notes        | text      | optional order-level notes — edited in the opened order (Orders page), next to the customer's note |
 | reminder1_at | timestamptz | pickup reminder 1 confirmed sent (see Pickup reminders) |
 | reminder2_at | timestamptz | pickup reminder 2 confirmed sent   |
 | created_at   | timestamp |                                    |
@@ -258,14 +258,14 @@ Table `app_settings` (one row, `id = 1`, JSON in `data`; created by `supabase/mi
 
 | key               | default | effect |
 | ----------------- | ------- | ------ |
-| `messageTemplate` | `DEFAULT_MESSAGE` in `whatsapp.js` | WhatsApp text; placeholders `{name}` (first name), `{order}` (#012), `{pieces}` ("Medium Cup ×2, Bowl"), `{count}` |
+| `messageTemplate` | `DEFAULT_MESSAGE` in `whatsapp.js` | WhatsApp text; placeholders `{name}` (first name), `{order}` (012, no #), `{pieces}` ("Medium Cup ×2, Bowl"), `{count}` |
 | `confirmSent`     | true    | ask "Sent? ✓ ✕" after opening WhatsApp; off → opening counts as told immediately |
 | `askWhyNotSent`   | true    | ✕ asks for a reason; off → records "Not sent" (only matters when `confirmSent` is on) |
 | `undoBar`         | true    | bar with Undo / Send WhatsApp after status changes; off → no bar (errors still show) |
 | `reminders`       | true    | offer pickup reminders (off → no banner, buttons or "due" orders) |
 | `reminderDays`    | 14      | days before reminder 1 (after the ready message) and reminder 2 (after reminder 1) |
 | `reminder1Template` / `reminder2Template` | `DEFAULT_REMINDER1` / `2` in `whatsapp.js` | reminder texts, same placeholders; edited in the Reminder 1 / 2 tabs |
-| `containers`      | A–J, Cbis, מחסן שחור, מחסן שקוף, מדף, שקית בקופה | choices in the container picker (Settings → Containers) |
+| `containers`      | A–J, Cbis, מחסן שחור, מחסן שקוף, מדף, שקית בקופה, תרומה | choices in the container picker (Settings → Containers) |
 
 The Orders page reads settings with `loadSettings({ fresh: true })` on mount. Changes are logged as app `info` events.
 

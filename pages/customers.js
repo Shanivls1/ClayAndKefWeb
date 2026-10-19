@@ -296,6 +296,7 @@ function buildRow(c, isLast) {
       <div style="flex:1;min-width:0;">
         <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:600;color:#1a120b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.name)}</div>
         <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.phone || 'No phone')} · ${objLabel}</div>
+        ${c.notes ? `<div title="${escHtml(c.notes)}" style="font-family:'Inter',sans-serif;font-size:12.5px;color:#a09080;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.notes)}</div>` : ''}
       </div>
       <div style="flex-shrink:0;">${rightEl}</div>
       <span style="flex-shrink:0;display:inline-flex;gap:2px;">

@@ -62,6 +62,7 @@ let remindDue    = 0;           // orders with a pickup reminder due (all pages)
 let remindSeq    = 0;           // ignores superseded counts
 let loadSeq        = 0;         // ignores responses from superseded searches
 let pageSignal     = null;
+let noteEdit       = null;      // { orderId, kind: 'order' | 'customer', draft } — the note being edited in an opened order
 
 // ─── Render ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,29 @@ export function render() {
       /* Pieces inside an opened order */
       .pc-well { background:#f6f1eb;padding:12px 20px 14px 68px;border-bottom:1px solid #ede6dd;display:flex;flex-direction:column;gap:8px; }
       .pc-foot { display:flex;justify-content:flex-end;margin-top:2px; }
+
+      /* Order note + customer note in an opened order */
+      .nt-box { display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px; }
+      .nt { background:#fff;border:1px solid #ece4da;border-radius:12px;padding:10px 14px;font-family:'Inter',sans-serif;min-width:0; }
+      .nt-head { display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;font-weight:600;color:#8a7560; }
+      .nt-text { margin-top:4px;font-size:13.5px;line-height:1.5;color:#3a2c1f;white-space:pre-wrap;overflow-wrap:anywhere; }
+      .nt-text.empty { color:#b8ab9c; }
+      .nt-edit { background:none;border:none;padding:3px 8px;border-radius:7px;cursor:pointer;font-family:'Inter',sans-serif;font-size:12px;font-weight:600;color:#9C1A4D; }
+      .nt-edit:hover { background:rgba(156,26,77,.06); }
+      .nt-edit:active { transform:scale(.96); }
+      .nt-edit:focus-visible { outline:2px solid #9C1A4D;outline-offset:1px; }
+      .nt textarea { display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:8px 10px;border:1px solid #e0d8cf;border-radius:9px;
+        font-family:'Inter',sans-serif;font-size:13.5px;line-height:1.5;color:#1a120b;resize:vertical;outline:none; }
+      .nt textarea:focus { border-color:#9C1A4D;box-shadow:0 0 0 3px rgba(156,26,77,.12); }
+      .nt-actions { display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px; }
+      .nt-save { padding:6px 14px;border-radius:8px;border:none;background:#9C1A4D;color:#fff;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;cursor:pointer; }
+      .nt-save:hover:not(:disabled) { background:#7D1540; }
+      .nt-save:active:not(:disabled) { transform:scale(.97); }
+      .nt-save:disabled { opacity:.6;cursor:progress; }
+      .nt-save:focus-visible, .nt-cancel:focus-visible { outline:2px solid #9C1A4D;outline-offset:2px; }
+      .nt-cancel { background:none;border:none;padding:6px 8px;cursor:pointer;font-family:'Inter',sans-serif;font-size:12.5px;color:#8a7560; }
+      .nt-cancel:hover { color:#1a120b; }
+      .nt-hint { flex:1;font-size:11.5px;color:#a09080; }
       .pc-card {
         display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.5fr) 168px;align-items:center;gap:16px;
         background:#fff;border:1px solid #ece4da;border-radius:12px;padding:12px 16px;
@@ -618,6 +642,7 @@ export async function mount(el, signal) {
   if (['stage', 'wa', 'type', 'container', 'from', 'to'].some(k => preset.has(k))) filtersOpen = true;
   if (preset.size) history.replaceState(null, '', '#/orders'); // a reload shows the plain list
   expandedIds = new Set();
+  noteEdit    = null;
   savingIds   = new Set();
   deleteStyles();
   await Promise.all([loadObjectTypes(), loadCustomers(), loadSettings({ fresh: true })]);
@@ -701,7 +726,7 @@ async function loadOrders(el) {
     const res = await supabase
       .from('orders')
       .select(`id, order_number, received_at, notes, reminder1_at, reminder2_at,
-               customers(id, name, phone),
+               customers(id, name, phone, notes),
                objects(id, status, notified_at, picked_up_at, container, original_code, object_types(id, name, code))`)
       .in('id', page.map(r => r.id));
     if (seq !== loadSeq || pageSignal?.aborted) return;
@@ -742,7 +767,17 @@ function renderOrders(el, orders) {
     return;
   }
 
+  const typing = document.activeElement?.classList.contains('nt-input');
+  const caret = typing ? document.activeElement.selectionStart : null;
   body.innerHTML = orders.map((o, i) => buildOrderBlock(o, i === orders.length - 1)).join('');
+  wireNotes(el);
+  const noteInput = el.querySelector('.nt-input');
+  if (noteInput && (typing || noteEdit?.fresh)) {
+    noteEdit.fresh = false;
+    noteInput.focus();
+    const at = caret ?? noteInput.value.length;
+    noteInput.setSelectionRange(at, at);
+  }
   wireExpandToggles(el);
   wireStatusButtons(el);
   wireWhatsAppButtons(el);
@@ -818,7 +853,10 @@ function buildOrderBlock(order, isLast) {
         <div style="display:flex;align-items:center;padding-top:2px;">${chevron}</div>
         <div style="font-family:'Inter',sans-serif;font-size:12px;font-weight:700;color:#9C1A4D;letter-spacing:0.02em;padding-top:2px;">${escHtml(ordNum)}</div>
         <div style="overflow:hidden;">
-          <div style="font-family:'Inter',sans-serif;font-size:14px;font-weight:600;color:#1a120b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(customer?.name ?? '—')}</div>
+          <div style="display:flex;align-items:baseline;gap:8px;min-width:0;font-family:'Inter',sans-serif;white-space:nowrap;">
+            <span style="font-size:14px;font-weight:600;color:#1a120b;overflow:hidden;text-overflow:ellipsis;min-width:0;">${escHtml(customer?.name ?? '—')}</span>
+            ${customer?.phone ? `<span style="flex-shrink:0;font-size:12px;font-weight:400;color:#a09080;direction:ltr;unicode-bidi:isolate;">${escHtml(customer.phone)}</span>` : ''}
+          </div>
           ${order.notes ? `<div style="font-family:'Inter',sans-serif;font-size:12px;color:#a09080;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">${escHtml(order.notes)}</div>` : ''}
         </div>
         <div style="font-family:'Inter',sans-serif;font-size:13px;color:#5a4a3a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-top:2px;">${escHtml(itemsSummary)}</div>
@@ -955,6 +993,7 @@ function buildItemsSection(order) {
     return `
       <div class="pc-well" style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;">
         No pieces in this order.
+        ${buildNotes(order)}
         ${del}
       </div>`;
   }
@@ -962,9 +1001,84 @@ function buildItemsSection(order) {
   return `
     <div class="pc-well">
       ${buildOrderStrip(order)}
+      ${buildNotes(order)}
       ${items.map(buildItemRow).join('')}
       ${del}
     </div>`;
+}
+
+// ─── Notes (order note + customer note) ──────────────────────────────────────
+
+function buildNotes(order) {
+  const id = escHtml(order.id);
+  const one = (kind, label, value, placeholder) => {
+    if (noteEdit && noteEdit.orderId === order.id && noteEdit.kind === kind) {
+      return `<div class="nt">
+        <div class="nt-head"><span>${escHtml(label)}</span></div>
+        <textarea class="nt-input" rows="2" maxlength="1000" aria-label="${escHtml(label)}">${escHtml(noteEdit.draft)}</textarea>
+        <div class="nt-actions"><span class="nt-hint">Ctrl+Enter saves · Esc cancels</span>
+          <button type="button" class="nt-cancel">Cancel</button>
+          <button type="button" class="nt-save">Save</button></div>
+      </div>`;
+    }
+    return `<div class="nt">
+      <div class="nt-head"><span>${escHtml(label)}</span>
+        <button type="button" class="nt-edit" data-order-id="${id}" data-kind="${kind}" aria-label="${value ? 'Edit' : 'Add'} the ${escHtml(label.toLowerCase())}">${value ? 'Edit' : 'Add'}</button></div>
+      <div class="nt-text${value ? '' : ' empty'}">${value ? escHtml(value) : placeholder}</div>
+    </div>`;
+  };
+  const customer = order.customers;
+  return `<div class="nt-box">
+    ${one('order', 'Order note', order.notes, 'No note for this order')}
+    ${customer ? one('customer', `Customer note · ${customer.name ?? ''}`, customer.notes, 'No note for this customer — seen on all their orders') : ''}
+  </div>`;
+}
+
+function wireNotes(el) {
+  el.querySelectorAll('.nt-edit').forEach(b => b.addEventListener('click', () => {
+    const order = allOrders.find(o => o.id === b.dataset.orderId);
+    if (!order) return;
+    const value = b.dataset.kind === 'order' ? order.notes : order.customers?.notes;
+    noteEdit = { orderId: order.id, kind: b.dataset.kind, draft: value ?? '', fresh: true };
+    renderOrders(el, allOrders);
+  }));
+  el.querySelector('.nt-cancel')?.addEventListener('click', () => { noteEdit = null; renderOrders(el, allOrders); });
+  el.querySelector('.nt-save')?.addEventListener('click', () => saveNote(el));
+  const input = el.querySelector('.nt-input');
+  if (!input) return;
+  input.addEventListener('input', () => { if (noteEdit) noteEdit.draft = input.value; });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); noteEdit = null; renderOrders(el, allOrders); }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveNote(el); }
+  });
+}
+
+// Order note → orders.notes; customer note → customers.notes (the same note on all their orders)
+async function saveNote(el) {
+  if (!noteEdit || noteEdit.saving) return;
+  const edit = noteEdit;
+  const order = allOrders.find(o => o.id === edit.orderId);
+  if (!order) { noteEdit = null; return; }
+  const isOrder = edit.kind === 'order';
+  const value = edit.draft.trim() || null;
+  edit.saving = true;
+  el.querySelector('.nt-save')?.setAttribute('disabled', '');
+  const { error } = isOrder
+    ? await supabase.from('orders').update({ notes: value }).eq('id', order.id)
+    : await supabase.from('customers').update({ notes: value }).eq('id', order.customers.id);
+  edit.saving = false;
+  if (pageSignal?.aborted) return;
+  if (error) {
+    el.querySelector('.nt-save')?.removeAttribute('disabled');
+    logEvent('error', `Couldn't save the ${isOrder ? 'order' : 'customer'} note on order ${fmtNum(order.order_number)}: ${error.message}`);
+    showToast(el, { html: `Couldn't save the note — ${escHtml(error.message)}`, tone: 'error' });
+    return;
+  }
+  if (isOrder) order.notes = value;
+  else for (const o of allOrders) if (o.customers?.id === order.customers.id) o.customers.notes = value; // their other orders on this page
+  noteEdit = null;
+  renderOrders(el, allOrders);
+  showToast(el, { html: `${isOrder ? 'Order' : 'Customer'} note saved`, duration: 2500 });
 }
 
 // Moves the whole order to its next stage: waiting pieces → ready, or (once all are ready) → collected.
