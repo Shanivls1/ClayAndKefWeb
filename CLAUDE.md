@@ -33,6 +33,9 @@ Five core tables in Supabase (PostgreSQL):
 | notes      | text      | optional                                |
 | created_at | timestamp |                                         |
 
+Edited on the Customers page (pencil → name, phone, notes). The phone must be usable for WhatsApp (`normalizePhone`);
+a number that already belongs to another customer only warns (families share phones) — pressing Save again goes ahead.
+
 ### `orders`
 
 One row per customer visit. A single order groups all objects a customer leaves in one visit.

@@ -5,6 +5,7 @@ import { logEvent } from '../log.js';
 import { confirmDanger, deleteStyles, ICON_TRASH } from '../confirm.js';
 import { LIST_CSS, searchBox, chipGroup, selectBox, clearButton, wireFilters, activeCount, updateClear, renderPager } from '../listui.js';
 
+const ICON_EDIT = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
 const AVATAR_COLORS = ['#e8d5c0', '#dcc9b4', '#d4bfaa', '#c8b49e', '#bda892'];
 
 function getInitials(name) {
@@ -105,7 +106,7 @@ export function render() {
           onmouseout="this.style.background='none'"
         >×</button>
 
-        <h2 style="font-family:'Inter',sans-serif;font-size:22px;font-weight:700;color:#1a120b;margin-bottom:24px;">Add Customer</h2>
+        <h2 id="cust-modal-title" style="font-family:'Inter',sans-serif;font-size:22px;font-weight:700;color:#1a120b;margin-bottom:24px;">Add Customer</h2>
 
         <form id="add-customer-form" autocomplete="off">
           <div style="margin-bottom:16px;">
@@ -125,7 +126,7 @@ export function render() {
           <div style="margin-bottom:16px;">
             <label style="display:block;font-size:13px;font-weight:500;color:#5a4a3a;margin-bottom:6px;">
               Phone <span style="color:#9C1A4D">*</span>
-              <span style="font-weight:400;color:#8a7560">(include country code)</span>
+              <span style="font-weight:400;color:#8a7560">(for WhatsApp)</span>
             </label>
             <input name="phone" type="tel" required placeholder="e.g. +972-50-123-4567" style="
               width:100%;padding:10px 14px;font-family:'Inter',sans-serif;font-size:14px;
@@ -151,6 +152,7 @@ export function render() {
             ></textarea>
           </div>
 
+          <div id="form-warn" style="display:none;color:#8a6200;background:rgba(217,119,6,0.08);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.5;margin-bottom:12px;"></div>
           <div id="form-error" style="display:none;color:#b94040;font-size:13px;margin-bottom:12px;"></div>
 
           <button type="submit" id="btn-submit" style="
@@ -210,6 +212,8 @@ export async function mount(el, signal) {
   el.querySelector('#customers-list').addEventListener('click', e => {
     const btn = e.target.closest('.cust-del');
     if (btn) deleteCustomer(el, shownRows.find(c => c.id === btn.dataset.id));
+    const edit = e.target.closest('.cust-edit');
+    if (edit) el.openCustomerEdit?.(shownRows.find(c => c.id === edit.dataset.id));
   });
   await loadCustomers(el);
 }
@@ -294,8 +298,12 @@ function buildRow(c, isLast) {
         <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8a7560;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(c.phone || 'No phone')} · ${objLabel}</div>
       </div>
       <div style="flex-shrink:0;">${rightEl}</div>
-      <button type="button" class="del-btn cust-del" data-id="${escHtml(c.id)}" style="flex-shrink:0;"
-        title="Delete customer" aria-label="Delete ${escHtml(c.name)}">${ICON_TRASH}</button>
+      <span style="flex-shrink:0;display:inline-flex;gap:2px;">
+        <button type="button" class="del-btn cust-edit" data-id="${escHtml(c.id)}"
+          title="Edit name, phone or notes" aria-label="Edit ${escHtml(c.name)}">${ICON_EDIT}</button>
+        <button type="button" class="del-btn cust-del" data-id="${escHtml(c.id)}"
+          title="Delete customer" aria-label="Delete ${escHtml(c.name)}">${ICON_TRASH}</button>
+      </span>
     </div>`;
 }
 
@@ -372,22 +380,50 @@ function wireModal(el, signal) {
   const addBtn    = el.querySelector('#btn-add-customer');
   const form      = el.querySelector('#add-customer-form');
   const errorDiv  = el.querySelector('#form-error');
+  const warnDiv   = el.querySelector('#form-warn');
   const submitBtn = el.querySelector('#btn-submit');
+  const title     = el.querySelector('#cust-modal-title');
+  let editing = null;      // the customer being edited, or null when adding
+  let warnedFor = null;    // phone the "already belongs to" warning was shown for — a second Save goes ahead
 
-  function openModal() {
-    backdrop.style.display = 'flex';
+  const label = () => (editing ? 'Save changes' : 'Add Customer');
+  const show = (div, text) => { div.textContent = text; div.style.display = text ? 'block' : 'none'; };
+
+  function openModal(customer = null) {
+    editing = customer;
+    warnedFor = null;
     form.reset();
-    errorDiv.style.display = 'none';
+    if (customer) {
+      form.elements.name.value  = customer.name ?? '';
+      form.elements.phone.value = customer.phone ?? '';
+      form.elements.notes.value = customer.notes ?? '';
+    }
+    title.textContent = customer ? 'Edit customer' : 'Add Customer';
+    submitBtn.textContent = label();
+    show(errorDiv, ''); show(warnDiv, '');
+    backdrop.style.display = 'flex';
+    form.elements.name.focus();
   }
+  el.openCustomerEdit = c => { if (c) openModal(c); };
 
   function closeModal() {
     backdrop.style.display = 'none';
+    editing = null;
   }
 
-  addBtn.addEventListener('click', openModal);
+  addBtn.addEventListener('click', () => openModal());
   closeBtn.addEventListener('click', closeModal);
   backdrop.addEventListener('click', e => { if (e.target === backdrop) closeModal(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); }, { signal });
+  form.elements.phone.addEventListener('input', () => { warnedFor = null; show(warnDiv, ''); submitBtn.textContent = label(); });
+
+  // Another customer with the same number (written any way)? Families sometimes share one, so it's a warning only.
+  async function phoneOwner(phone) {
+    const { data } = await supabase.from('customers').select('id, name, phone')
+      .filter('phone', 'match', phonePattern(phone) ?? 'a^').limit(20);
+    const n = normalizePhone(phone);
+    return (data ?? []).find(c => c.id !== editing?.id && normalizePhone(c.phone) === n) ?? null;
+  }
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
@@ -395,36 +431,46 @@ function wireModal(el, signal) {
     const phone = form.elements.phone.value.trim();
     const notes = form.elements.notes.value.trim();
 
-    if (!name || !phone) {
-      errorDiv.textContent = 'Name and phone are required.';
-      errorDiv.style.display = 'block';
-      return;
-    }
+    if (!name || !phone) { show(errorDiv, 'Name and phone are required.'); return; }
     if (!normalizePhone(phone)) {
-      errorDiv.textContent = 'This phone number can’t be used for WhatsApp. Type it like 050-123-4567 or +972 50-123-4567.';
-      errorDiv.style.display = 'block';
+      show(errorDiv, 'This phone number can’t be used for WhatsApp. Type it like 050-123-4567 or +972 50-123-4567.');
       return;
     }
-
-    errorDiv.style.display = 'none';
+    show(errorDiv, '');
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Adding…';
+    submitBtn.textContent = editing ? 'Saving…' : 'Adding…';
 
-    const { error } = await supabase
-      .from('customers')
-      .insert({ name, phone, notes: notes || null });
+    const phoneChanged = !editing || normalizePhone(phone) !== normalizePhone(editing.phone);
+    if (phoneChanged && warnedFor !== phone) {
+      const other = await phoneOwner(phone);
+      if (signal.aborted) return;
+      if (other) {
+        warnedFor = phone;
+        submitBtn.disabled = false;
+        submitBtn.textContent = editing ? 'Save anyway' : 'Add anyway';
+        show(warnDiv, `This number already belongs to ${other.name}. If it really is a different person (e.g. family sharing a phone), press the button again.`);
+        return;
+      }
+    }
+
+    const row = { name, phone, notes: notes || null };
+    const { error } = editing
+      ? await supabase.from('customers').update(row).eq('id', editing.id).select('id').single()
+      : await supabase.from('customers').insert(row);
 
     submitBtn.disabled = false;
-    submitBtn.textContent = 'Add Customer';
+    submitBtn.textContent = label();
+    if (signal.aborted) return;
 
     if (error) {
-      logEvent('error', `Couldn't add customer ${name}: ${error.message}`);
-      errorDiv.textContent = 'Failed to add customer: ' + error.message;
-      errorDiv.style.display = 'block';
+      logEvent('error', `Couldn't ${editing ? 'save' : 'add'} customer ${name}: ${error.message}`);
+      show(errorDiv, `Couldn't ${editing ? 'save' : 'add the customer'}: ${error.message}`);
       return;
     }
 
+    const wasEditing = !!editing;
     closeModal();
+    if (wasEditing) { await loadCustomers(el); return; }   // stay on the same page and filters
     filters = { ...DEFAULTS, sort: filters.sort };
     renderFilters(el);
     currentPage = 1;

@@ -1368,7 +1368,7 @@ function sendWhatsApp(el, order, kind = 'ready') {
   const text = buildReadyMessage(template, customer?.name, order.order_number, items.map(i => i.object_types?.name ?? 'piece'));
   if (!openWhatsApp(customer?.phone, text)) {
     recordNotSent(el, order.id, "Phone number can't be used for WhatsApp");
-    showToast(el, { html: `${escHtml(customer?.name ?? 'This customer')}'s phone number can't be used for WhatsApp — fix it in Supabase.`, tone: 'error' });
+    showToast(el, { html: `${escHtml(customer?.name ?? 'This customer')}'s phone number can't be used for WhatsApp — fix it on the Customers page (pencil next to their name).`, tone: 'error' });
     return;
   }
   const openedAt = new Date().toISOString();
