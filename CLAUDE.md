@@ -126,7 +126,8 @@ Run by hand in the Supabase SQL Editor — the app's anon key can't change the s
 - Triggers: `trg_set_order_number` (orders; numbers 1–1000 cycling, no skipping, see `migrations/20261019_order_numbers_no_skipping.sql`), `trg_is_returning` (objects → keeps `customers.is_returning` current, via orders),
   `log_activity` (all four tables). There is no WhatsApp webhook trigger anymore.
 - Deleting (`migrations/20261015_delete_functions.sql`, RPCs, all-or-nothing): `delete_order(p_order_id, p_restock)` — the order
-  and its pieces, optionally putting waiting blanks back in stock; `delete_customer(p_customer_id)` — with all their orders
+  and its pieces, optionally putting waiting blanks back in stock; `delete_object(p_object_id, p_restock)` (`migrations/20261024_delete_object.sql`) — one
+  piece out of an order (bin on the piece in the opened order; refused for the order's last piece); `delete_customer(p_customer_id)` — with all their orders
   and pieces; `delete_object_type(p_type_id)` — refused while any piece uses it. The app confirms each with `confirm.js`
   (`confirmDanger`); every deleted row stays in `activity_log`.
 

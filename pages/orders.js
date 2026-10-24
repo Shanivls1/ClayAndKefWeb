@@ -110,7 +110,7 @@ export function render() {
       .nt-cancel:hover { color:#1a120b; }
       .nt-hint { flex:1;font-size:11.5px;color:#a09080; }
       .pc-card {
-        display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.5fr) 168px;align-items:center;gap:16px;
+        display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.5fr) 168px 30px;align-items:center;gap:16px;
         background:#fff;border:1px solid #ece4da;border-radius:12px;padding:12px 16px;
         box-shadow:0 1px 2px rgba(45,31,20,0.05),0 4px 14px rgba(45,31,20,0.04);
       }
@@ -788,6 +788,8 @@ function renderOrders(el, orders) {
   wireExpandToggles(el);
   wireStatusButtons(el);
   wireWhatsAppButtons(el);
+  el.querySelectorAll('.piece-del').forEach(btn =>
+    btn.addEventListener('click', () => deletePiece(el, btn.dataset.objectId)));
   el.querySelectorAll('.ord-del').forEach(btn =>
     btn.addEventListener('click', () => deleteOrder(el, allOrders.find(o => o.id === btn.dataset.orderId))));
 }
@@ -1162,6 +1164,8 @@ function buildItemRow(item) {
       </div>
       ${buildTrack(item.status)}
       ${action}
+      <button type="button" class="del-btn piece-del" data-object-id="${id}" title="Remove this piece from the order"
+        aria-label="Remove ${escHtml(code || name)} from the order">${ICON_TRASH}</button>
     </div>`;
 }
 
@@ -1200,6 +1204,45 @@ async function deleteOrder(el, order) {
   pendingWa.delete(order.id);
   if (allOrders.length === 1 && currentPage > 1) currentPage--;
   loadOrders(el);
+}
+
+// One piece out of an order (e.g. entered by mistake). A waiting piece is an unpainted blank — offered back
+// into stock. The last piece can't go: that's "Delete order". All in one step in the database (delete_object).
+async function deletePiece(el, objectId) {
+  const item  = findItem(objectId);
+  const order = findOrderOf(objectId);
+  if (!item || !order) return;
+  const num   = fmtNum(order.order_number);
+  const label = item.object_types?.code ? `${item.object_types.code} (${item.object_types.name ?? ''})` : (item.object_types?.name ?? 'This piece');
+  if ((order.objects ?? []).length <= 1) {
+    await confirmDanger({
+      title: 'This is the only piece in the order',
+      body: `Order <b>${escHtml(num)}</b> would be left empty. To remove it, use <b>Delete order</b> below the pieces instead.`,
+    });
+    return;
+  }
+  const waiting = item.status === 'received';
+  const removed = await confirmDanger({
+    title: `Remove ${label} from order ${num}?`,
+    body: `The other ${order.objects.length - 1 === 1 ? 'piece stays' : `${order.objects.length - 1} pieces stay`} in the order. This can't be undone.`,
+    check: waiting ? { label: 'Put the blank back in stock', checked: true } : null,
+    confirmLabel: 'Remove piece',
+    run: async restock => {
+      const { data, error } = await supabase.rpc('delete_object', { p_object_id: objectId, p_restock: !!restock });
+      if (error) {
+        logEvent('error', `Couldn't remove ${label} from order ${num}: ${error.message}`);
+        return `Couldn't remove it — ${error.message}`;
+      }
+      const r = data?.[0] ?? {};
+      logEvent('info', `Removed ${label} from order ${num} (${order.customers?.name ?? '—'})${r.restocked ? ', blank back in stock' : ''}`);
+      return null;
+    },
+  });
+  if (!removed) return;
+  order.objects = order.objects.filter(o => o.id !== objectId);
+  renderOrders(el, allOrders);
+  loadRemindCount(el);
+  if (settings().undoBar) showToast(el, { html: `${escHtml(label)} removed from order ${escHtml(num)}`, duration: 3500 });
 }
 
 // ─── Expand / collapse ────────────────────────────────────────────────────────
