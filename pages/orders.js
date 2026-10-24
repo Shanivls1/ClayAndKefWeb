@@ -60,7 +60,8 @@ const DEFAULT_REASONS = ["Number isn't on WhatsApp", 'Wrong number', "WhatsApp d
 let waReasons    = [...DEFAULT_REASONS];
 let remindDue    = 0;           // orders with a pickup reminder due (all pages)
 let remindSeq    = 0;           // ignores superseded counts
-let loadSeq        = 0;         // ignores responses from superseded searches
+let loadSeq        = 0;
+let searchPieces   = true;      // search also looks in the pieces (order_list.pieces_text); off if the view doesn't have it yet         // ignores responses from superseded searches
 let pageSignal     = null;
 let noteEdit       = null;      // { orderId, kind: 'order' | 'customer', draft } — the note being edited in an opened order
 
@@ -700,7 +701,9 @@ async function loadOrders(el) {
     // 1–4 digits (optionally "#12") = order number; longer digit strings = part of a phone number
     if (/^\d{1,4}$/.test(num))      query = query.eq('order_number', Number(num));
     else if (looksLikePhone(q))    query = query.filter('customer_phone', 'match', phonePattern(q) ?? 'a^');
-    else                            query = query.or(`customer_name.ilike.${like},customer_phone.ilike.${like}`);
+    // text = customer name or phone, or what's in the order: piece code (MGY2), type name (Mug) or old code
+    else                            query = query.or(`customer_name.ilike.${like},customer_phone.ilike.${like}` +
+                                                     (searchPieces ? `,pieces_text.ilike.${like}` : ''));
   }
   if (filters.stage !== 'all')             query = query.eq('stage', filters.stage);
   if (filters.wa === 'to_tell')            query = query.eq('stage', 'ready').gt('ready_untold', 0);
@@ -719,6 +722,10 @@ async function loadOrders(el) {
   const seq = ++loadSeq;
   const { data: page, error: pageError, count } = await query;
   if (seq !== loadSeq || pageSignal?.aborted) return;
+  if (pageError && searchPieces && /pieces_text/.test(pageError.message)) {
+    searchPieces = false; // database not updated yet (migrations/20261024_order_search_pieces.sql) — search names and phones only
+    return loadOrders(el);
+  }
 
   // 2. Those orders in full, with customer and pieces
   let data = [], error = pageError;
@@ -1862,7 +1869,7 @@ function renderFilters(el, signal) {
     .map(t => [t.code, t.code && t.name && t.name !== t.code ? `${t.code} — ${t.name}` : (t.code || t.name)])];
   box.innerHTML = `
     <div class="fbar-row">
-      ${searchBox('ord-search', 'Search by name, phone or order number…', filters.q)}
+      ${searchBox('ord-search', 'Search by name, phone, order number or piece (code or name)…', filters.q)}
       ${filterToggle(hiddenFilterCount(), filtersOpen)}
       ${selectBox('sort', 'Sort', [['newest', 'Newest first'], ['oldest', 'Oldest first']], filters.sort)}
     </div>

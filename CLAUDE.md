@@ -230,7 +230,8 @@ Every list page uses the shared controls in `listui.js` (filter bar: search, chi
   waiting/ready/collected/empty, `ready_untold`, padded `codes`) and `customer_list` (visits, pieces, last_visit,
   open_orders). Orders fetches the page's ids from the view, then those orders in full.
 - **Stock** filters/sorts/pages in the browser (all types are loaded anyway). **Logs** filters on `activity_log`.
-- Orders search: 1–4 digits (or `#12`) = order number, longer digits = phone, text = name or phone.
+- Orders search: 1–4 digits (or `#12`) = order number, longer digits = phone, text = name, phone or a piece — code,
+  type name or original code (`order_list.pieces_text`, `migrations/20261024_order_search_pieces.sql`). Home → Collecting the same.
 - Orders: search and sort are always visible; the other filters (Status: All / Waiting / Ready / Collected,
   WhatsApp, object type, container, dates) sit behind a **Filters** button, collapsed when the page opens. Its badge
   counts the hidden filters that are on (`filterToggle` / `updateToggle` in `listui.js`).

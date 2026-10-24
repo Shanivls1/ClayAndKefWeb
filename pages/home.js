@@ -237,7 +237,7 @@ export function render() {
             <div class="hm-search">
               ${I_SEARCH}
               <input id="hm-col-q" class="hm-input" type="text" autocomplete="off" spellcheck="false"
-                placeholder="Order number, phone or name" aria-labelledby="hm-col-title" />
+                placeholder="Order number, phone, name or piece" aria-labelledby="hm-col-title" />
             </div>
             <div class="hm-pick" id="hm-col-list" aria-live="polite"></div>
           </div>
@@ -663,6 +663,7 @@ function resetForm() {
 // ─── Customer collecting ──────────────────────────────────────────────────────
 
 let colSeq = 0;
+let colPieces = true; // Collecting search also looks in the pieces (order_list.pieces_text)
 const collected = new Map(); // orderId → piece ids just collected (for Undo)
 
 function wireCollect() {
@@ -688,9 +689,11 @@ async function searchCollect(raw) {
   const num = q.replace(/^#/, '');
   if (/^\d{1,4}$/.test(num))      query = query.eq('order_number', Number(num));
   else if (looksLikePhone(q))     query = query.filter('customer_phone', 'match', phonePattern(q) ?? 'a^');
-  else                            query = query.or(`customer_name.ilike.${pgQuote(`%${q}%`)},customer_phone.ilike.${pgQuote(`%${q}%`)}`);
+  else                            query = query.or(`customer_name.ilike.${pgQuote(`%${q}%`)},customer_phone.ilike.${pgQuote(`%${q}%`)}` +
+                                                   (colPieces ? `,pieces_text.ilike.${pgQuote(`%${q}%`)}` : ''));   // or a piece code / name
   const { data, error } = await query.order('received_at', { ascending: false }).limit(6);
   if (seq !== colSeq || pageSignal?.aborted) return;
+  if (error && colPieces && /pieces_text/.test(error.message)) { colPieces = false; return searchCollect(raw); } // database not updated yet
   if (error) {
     logEvent('error', `Home: couldn't search orders to collect: ${error.message}`);
     list.innerHTML = `<div class="hm-empty">Couldn't search — ${escHtml(error.message)}</div>`;
